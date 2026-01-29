@@ -86,7 +86,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   return (
     <AuthContext.Provider value={{
       user, session, loading,
-      isConfigured: isSupabaseConfigured,
+      isConfigured: !!isSupabaseConfigured,
       signInWithGoogle, signInWithGithub, signOut
     }}>
       {children}
