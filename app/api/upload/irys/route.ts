@@ -1,3 +1,24 @@
+/**
+ * POST /api/upload/irys
+ *
+ * Uploads a file to the Irys devnet (Arweave-backed permanent storage).
+ *
+ * Flow:
+ *  1. Validate file size (max 6 GB, checked via Content-Length header AND file bytes).
+ *  2. Initialize an Irys uploader using the server's Ethereum wallet (PRIVATE_KEY env).
+ *  3. Check wallet balance against the quoted upload price.
+ *  4. Upload the file buffer with metadata tags (Content-Type, Filename, Size, Timestamp).
+ *  5. Save a record to Supabase `files` table (gracefully continues if DB is unavailable).
+ *  6. For authenticated users, increment their storage quota via an RPC call.
+ *  7. For anonymous uploads, generate a `claimToken` (UUID) so the file can be
+ *     associated with an account later via the auth callback.
+ *
+ * Returns: `{ success, url, id, arUrl, size, contentType, filename, claimToken, expiresAt }`
+ *
+ * Environment:
+ *  - PRIVATE_KEY  — Ethereum private key funding the Irys devnet wallet.
+ *  - SEPOLIA_RPC  — JSON-RPC endpoint for Base Sepolia testnet.
+ */
 import { NextRequest, NextResponse } from 'next/server'
 import { Uploader } from '@irys/upload'
 import { Ethereum } from '@irys/upload-ethereum'
@@ -5,7 +26,7 @@ import { createServerSupabaseClient } from '@/app/lib/supabase-server'
 import { randomUUID } from 'crypto'
 
 export const runtime = 'nodejs'
-export const maxDuration = 300 // 5 minutes for large files
+export const maxDuration = 300
 
 export async function POST(request: NextRequest) {
   try {
@@ -111,48 +132,48 @@ export async function POST(request: NextRequest) {
 
     console.log(`✅ Upload successful: ${irysUrl}`)
 
-    // Save to database
+    // Save to database (skip if Supabase not configured)
     const supabase = await createServerSupabaseClient()
 
-    // Check if user is authenticated
-    const { data: { user } } = await supabase.auth.getUser()
-
-    // Generate claim token for unauthenticated uploads
-    const claimToken = user ? null : randomUUID()
-
-    // Calculate expiration (14 days for free tier on devnet)
+    let user = null
+    let claimToken: string | null = null
     const expiresAt = new Date()
     expiresAt.setDate(expiresAt.getDate() + 14)
 
-    // Save file metadata to database
-    const { error: dbError } = await supabase
-      .from('files')
-      .insert({
-        user_id: user?.id || null,
-        irys_id: receipt.id,
-        url: irysUrl,
-        ar_url: `ar://${receipt.id}`,
-        filename: file.name,
-        content_type: contentType,
-        size_bytes: buffer.length,
-        storage_tier: 'free',
-        is_permanent: false,
-        expires_at: expiresAt.toISOString(),
-        claim_token: claimToken,
-        claimed_at: user ? new Date().toISOString() : null
-      })
+    if (supabase) {
+      const { data: { user: authUser } } = await supabase.auth.getUser()
+      user = authUser
+      claimToken = user ? null : randomUUID()
 
-    if (dbError) {
-      console.warn('⚠️ Database save failed:', dbError.message)
-      // Still return success - file is uploaded to Irys
-    }
+      const { error: dbError } = await supabase
+        .from('files')
+        .insert({
+          user_id: user?.id || null,
+          irys_id: receipt.id,
+          url: irysUrl,
+          ar_url: `ar://${receipt.id}`,
+          filename: file.name,
+          content_type: contentType,
+          size_bytes: buffer.length,
+          storage_tier: 'free',
+          is_permanent: false,
+          expires_at: expiresAt.toISOString(),
+          claim_token: claimToken,
+          claimed_at: user ? new Date().toISOString() : null
+        })
 
-    // Update user's storage quota if authenticated
-    if (user) {
-      await supabase.rpc('increment_storage', {
-        p_user_id: user.id,
-        p_bytes: buffer.length
-      })
+      if (dbError) {
+        console.warn('⚠️ Database save failed:', dbError.message)
+      }
+
+      if (user) {
+        await supabase.rpc('increment_storage', {
+          p_user_id: user.id,
+          p_bytes: buffer.length
+        })
+      }
+    } else {
+      claimToken = randomUUID()
     }
 
     return NextResponse.json({
@@ -179,6 +200,7 @@ export async function POST(request: NextRequest) {
   }
 }
 
+/** Maps common file extensions to MIME types. Falls back to `application/octet-stream`. */
 const getContentType = (filename: string): string => {
   const ext = filename.toLowerCase().split('.').pop()
   const contentTypes: { [key: string]: string } = {
