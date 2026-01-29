@@ -1,3 +1,17 @@
+/**
+ * AuthProvider — React Context provider for Supabase authentication.
+ *
+ * Wraps the app in a context that exposes the current user/session,
+ * loading state, and OAuth sign-in methods (Google, GitHub).
+ *
+ * Gracefully degrades: if Supabase env vars are not configured,
+ * `isConfigured` is false and all auth methods are no-ops. This
+ * lets the app run in "demo mode" without a database.
+ *
+ * The `claimToken` parameter on sign-in methods appends a query param
+ * to the OAuth redirect URL so the auth callback can associate
+ * anonymous uploads with the newly authenticated user.
+ */
 'use client'
 
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'

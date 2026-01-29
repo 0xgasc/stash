@@ -46,6 +46,7 @@ export default function DashboardPage() {
   }, [user, authLoading])
 
   const fetchDashboardData = async () => {
+    if (!supabase) return
     try {
       const [filesRes, storageRes] = await Promise.all([
         supabase
@@ -76,7 +77,7 @@ export default function DashboardPage() {
 
   const deleteFile = async (id: string) => {
     if (confirm('Remove from dashboard? The file will remain on Arweave.')) {
-      await supabase.from('files').delete().eq('id', id)
+      await supabase?.from('files').delete().eq('id', id)
       setFiles(files.filter(f => f.id !== id))
     }
   }
