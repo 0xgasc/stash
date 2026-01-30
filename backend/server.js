@@ -175,6 +175,10 @@ app.all('/tus-upload/:id', async (req, res, next) => {
 // =====================================================
 // TUS COMPLETION — triggers Irys upload
 // =====================================================
+app.options('/tus-upload/complete', (req, res) => {
+  res.sendStatus(204);
+});
+
 app.post('/tus-upload/complete', async (req, res) => {
   try {
     const { uploadId, originalFilename } = req.body;
@@ -182,8 +186,49 @@ app.post('/tus-upload/complete', async (req, res) => {
     console.log(`📤 Processing completed tus upload: ${uploadId}`);
     console.log(`   - Original filename: ${originalFilename}`);
 
+    // List all known completed uploads for debugging
+    console.log(`   - Known completed uploads: [${[...completedTusUploads.keys()].join(', ')}]`);
+
     const uploadInfo = completedTusUploads.get(uploadId);
     if (!uploadInfo) {
+      // Try to find the file directly on disk (fallback)
+      const possiblePath = path.join(tusUploadDir, uploadId);
+      if (fs.existsSync(possiblePath)) {
+        console.log(`   ⚠️ Upload not in map but found on disk: ${possiblePath}`);
+        const stat = fs.statSync(possiblePath);
+        // Proceed with file found on disk
+        console.log('🚀 Uploading to Irys (from disk fallback)...');
+        const result = await uploadFileToIrysFromPath(possiblePath, originalFilename);
+        console.log(`✅ Irys upload complete: ${result.url}`);
+
+        // Cleanup
+        try {
+          fs.unlinkSync(possiblePath);
+          const metadataPath = possiblePath + '.json';
+          if (fs.existsSync(metadataPath)) fs.unlinkSync(metadataPath);
+        } catch (cleanupError) {
+          console.error('⚠️ Cleanup failed:', cleanupError.message);
+        }
+
+        return res.json({
+          success: true,
+          url: result.url,
+          id: result.id,
+          arUrl: result.arUrl,
+          size: result.size || stat.size,
+          contentType: result.contentType,
+          filename: result.filename,
+        });
+      }
+
+      // List files in tus directory for debugging
+      try {
+        const files = fs.readdirSync(tusUploadDir);
+        console.log(`   - Files in tus dir: [${files.join(', ')}]`);
+      } catch (e) {
+        console.log(`   - Could not list tus dir: ${e.message}`);
+      }
+
       console.error(`❌ Upload not found: ${uploadId}`);
       return res.status(404).json({
         error: 'Upload not found. It may have expired or been processed already.',
@@ -229,6 +274,7 @@ app.post('/tus-upload/complete', async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Tus completion error:', error);
+    console.error('   Stack:', error.stack);
     res.status(500).json({
       error: 'Failed to process upload',
       details: error.message,
