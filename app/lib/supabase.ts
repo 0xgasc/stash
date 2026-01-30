@@ -1,3 +1,10 @@
+/**
+ * Browser-side Supabase client.
+ *
+ * Returns null if Supabase env vars are not configured (demo mode).
+ * Exports `isSupabaseConfigured` flag used by AuthProvider to decide
+ * whether to show auth UI.
+ */
 import { createBrowserClient } from '@supabase/ssr'
 
 // Check if Supabase is configured

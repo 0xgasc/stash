@@ -1,3 +1,10 @@
+/**
+ * /pricing — Pricing tiers, comparison table, and FAQ.
+ *
+ * Shows Free (50GB testnet) and Permanent ($0.50/GB Arweave) tiers,
+ * example pricing, a comparison table vs Google Drive and Dropbox,
+ * and frequently asked questions.
+ */
 import Link from 'next/link'
 import { Check } from 'lucide-react'
 

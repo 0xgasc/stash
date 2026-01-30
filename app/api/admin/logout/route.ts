@@ -1,3 +1,9 @@
+/**
+ * POST /api/admin/logout
+ *
+ * Ends the admin session by clearing the `admin_token` cookie
+ * (sets maxAge to 0).
+ */
 import { NextResponse } from 'next/server'
 
 export async function POST() {

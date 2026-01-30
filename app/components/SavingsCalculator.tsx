@@ -1,3 +1,10 @@
+/**
+ * SavingsCalculator — Interactive cost comparison tool.
+ *
+ * Lets users input storage size and time period, then compares
+ * the cumulative cost of Google Drive, Dropbox, and OneDrive
+ * against Stash's one-time permanent storage fee ($0.50/GB).
+ */
 'use client'
 
 import { useState } from 'react'

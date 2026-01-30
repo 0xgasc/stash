@@ -1,3 +1,10 @@
+/**
+ * /upload — Dedicated upload page.
+ *
+ * Renders the UploadInterface component with a pricing summary.
+ * Alternative to the homepage upload widget for users who navigate
+ * directly to /upload.
+ */
 import UploadInterface from '../components/UploadInterface'
 import Link from 'next/link'
 

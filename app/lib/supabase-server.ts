@@ -1,3 +1,10 @@
+/**
+ * Server-side Supabase client for API routes and server components.
+ *
+ * Returns null if Supabase env vars are not configured, allowing the
+ * app to run in "demo mode" without a database. Handles cookie
+ * get/set for Supabase session management.
+ */
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 

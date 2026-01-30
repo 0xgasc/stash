@@ -1,7 +1,17 @@
+/**
+ * UploadInterface — Drag-and-drop upload widget with file preview.
+ *
+ * Used on the /upload page. Supports drag-and-drop and click-to-select,
+ * shows image/video previews, upload progress, permanent URL with
+ * copy/open buttons, rate limit messaging, and an auth prompt for
+ * anonymous users to claim their upload.
+ */
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { Upload, X, Check, Loader2, FileIcon, AlertCircle } from 'lucide-react'
+import AuthModal from './AuthModal'
+import { useAuth } from './AuthProvider'
 
 interface UploadInterfaceProps {
   onUploadComplete?: (url: string, fileInfo: FileInfo) => void
@@ -15,20 +25,39 @@ interface FileInfo {
   uploadedAt: string
 }
 
+interface UploadLimit {
+  remaining: number
+  limit: number
+  limitReached: boolean
+  maxFileSizeMB: number
+}
+
 export default function UploadInterface({ onUploadComplete }: UploadInterfaceProps) {
+  const { user } = useAuth()
   const [uploading, setUploading] = useState(false)
   const [preview, setPreview] = useState<string | null>(null)
   const [file, setFile] = useState<File | null>(null)
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  const [uploadLimit, setUploadLimit] = useState<UploadLimit | null>(null)
+  const [showAuthModal, setShowAuthModal] = useState(false)
+
+  useEffect(() => {
+    if (!user) {
+      fetch('/api/upload/check-limit')
+        .then(r => r.json())
+        .then(setUploadLimit)
+        .catch(() => {})
+    }
+  }, [user])
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0]
     if (selectedFile) {
-      const maxSize = 6 * 1024 * 1024 * 1024 // 6GB
-      if (selectedFile.size > maxSize) {
-        setError(`File too large. Maximum size is 6GB. Your file is ${(selectedFile.size / 1024 / 1024 / 1024).toFixed(2)}GB.`)
+      const maxSizeBytes = (uploadLimit?.maxFileSizeMB ?? 6144) * 1024 * 1024
+      if (selectedFile.size > maxSizeBytes) {
+        setError(`File too large. Maximum size is ${((uploadLimit?.maxFileSizeMB ?? 6144) / 1024).toFixed(0)}GB. Your file is ${(selectedFile.size / 1024 / 1024 / 1024).toFixed(2)}GB.`)
         e.target.value = ''
         return
       }
@@ -36,7 +65,6 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
       setFile(selectedFile)
       setError(null)
 
-      // Preview for images/videos
       if (selectedFile.type.startsWith('image/') || selectedFile.type.startsWith('video/')) {
         const reader = new FileReader()
         reader.onloadend = () => {
@@ -71,15 +99,30 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
 
       setUploadProgress(80)
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.details || errorData.error || 'Upload failed')
+      const result = await response.json()
+
+      if (response.status === 429 && result.limitReached) {
+        setUploadLimit({ remaining: 0, limit: result.limit, limitReached: true, maxFileSizeMB: uploadLimit?.maxFileSizeMB ?? 6144 })
+        setError('Upload limit reached. Create an account to continue.')
+        setUploading(false)
+        setUploadProgress(0)
+        return
       }
 
-      const result = await response.json()
-      setUploadProgress(100)
+      if (!response.ok) {
+        throw new Error(result.details || result.error || 'Upload failed')
+      }
 
+      setUploadProgress(100)
       setUploadedUrl(result.url)
+
+      // Refresh limit
+      if (!user) {
+        fetch('/api/upload/check-limit')
+          .then(r => r.json())
+          .then(setUploadLimit)
+          .catch(() => {})
+      }
 
       const fileInfo: FileInfo = {
         url: result.url,
@@ -109,6 +152,34 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
     setError(null)
   }
 
+  // Limit reached state (no file selected yet)
+  if (!user && uploadLimit?.limitReached && !file) {
+    return (
+      <div className="w-full max-w-2xl mx-auto">
+        <div className="bg-gray-950 p-12 border border-gray-800 text-center">
+          <div className="w-14 h-14 border border-gray-700 flex items-center justify-center mx-auto mb-6">
+            <Upload className="w-6 h-6 text-gray-500" />
+          </div>
+          <h3 className="text-lg font-medium text-white mb-2">Upload limit reached</h3>
+          <p className="text-gray-500 text-sm mb-6">
+            You&apos;ve used all {uploadLimit.limit} free uploads. Create an account to continue.
+          </p>
+          <button
+            onClick={() => setShowAuthModal(true)}
+            className="bg-white hover:bg-gray-200 text-black font-medium py-3 px-8 transition-colors"
+          >
+            Create account
+          </button>
+
+          <AuthModal
+            open={showAuthModal}
+            onClose={() => setShowAuthModal(false)}
+          />
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="w-full max-w-2xl mx-auto">
       <div className="bg-gray-950 p-8 border border-gray-800">
@@ -130,8 +201,13 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
               </div>
               <span className="text-white text-sm mb-1">Click to select file</span>
               <span className="text-xs text-gray-600">
-                Up to 6GB, any format
+                Up to {((uploadLimit?.maxFileSizeMB ?? 6144) / 1024).toFixed(0)}GB, any format
               </span>
+              {!user && uploadLimit && uploadLimit.remaining < uploadLimit.limit && (
+                <span className="text-xs text-gray-600 mt-1">
+                  {uploadLimit.remaining} of {uploadLimit.limit} uploads remaining
+                </span>
+              )}
               <input
                 type="file"
                 onChange={handleFileSelect}
@@ -224,6 +300,11 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
                     Copy
                   </button>
                 </div>
+                {!user && (
+                  <p className="text-gray-500 text-xs mt-2">
+                    Save this link now. It won&apos;t be shown again without an account.
+                  </p>
+                )}
               </div>
             )}
 

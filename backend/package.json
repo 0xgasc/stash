@@ -1,0 +1,22 @@
+{
+  "name": "stash-upload-server",
+  "version": "1.0.0",
+  "description": "TUS resumable upload server for Stash — handles large files and uploads to Irys/Arweave",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "@irys/upload": "^0.0.15",
+    "@irys/upload-ethereum": "^0.0.16",
+    "@tus/file-store": "^2.0.0",
+    "@tus/server": "^2.3.0",
+    "compression": "^1.8.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.1.0",
+    "helmet": "^8.1.0"
+  }
+}

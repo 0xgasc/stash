@@ -1,3 +1,11 @@
+/**
+ * /dashboard — Authenticated user's file management page.
+ *
+ * Displays uploaded files in a table with stats (total files, storage used,
+ * free storage bar). Requires Supabase auth — redirects to / if not logged in.
+ * Supports file URL copying, opening, and removal from the dashboard
+ * (files remain on Arweave).
+ */
 'use client'
 
 import { useState, useEffect } from 'react'

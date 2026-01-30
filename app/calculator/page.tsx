@@ -1,3 +1,9 @@
+/**
+ * /calculator — Storage cost comparison page.
+ *
+ * Renders the SavingsCalculator component alongside a comparison
+ * of traditional cloud storage vs permanent blockchain storage.
+ */
 import SavingsCalculator from '../components/SavingsCalculator'
 import Link from 'next/link'
 

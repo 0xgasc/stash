@@ -1,3 +1,11 @@
+/**
+ * AuthModal — Sign-in modal with Google and GitHub OAuth buttons.
+ *
+ * Shown after upload to let anonymous users claim their file,
+ * or from the NavBar login button. Passes an optional `claimToken`
+ * to the OAuth redirect so the callback can associate the file
+ * with the new account.
+ */
 'use client'
 
 import { useAuth } from './AuthProvider'

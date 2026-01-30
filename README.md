@@ -1,216 +1,212 @@
-# AETER - Eternal Space for Your Files
+# Stash
 
-**Tagline:** *Eternal space for your files*
+Permanent file storage on the blockchain. Upload a file, get a link. No account required.
 
-AETER is a decentralized storage platform built on Arweave and Irys, offering permanent file storage with simple, transparent pricing. Unlike traditional cloud storage (Google Drive, Dropbox), your files are stored eternally on the Arweave blockchain for 200+ years—no recurring monthly fees.
+Built on [Irys](https://irys.xyz) + [Arweave](https://arweave.org). Currently running on Base Sepolia testnet.
 
----
-
-## 🚀 Features
-
-- ✅ **Eternal Storage**: Files stored on Arweave for 200+ years
-- ✅ **Decentralized**: No single point of failure, censorship-resistant
-- ✅ **Transparent Pricing**: Starting at $5/month for 10GB permanent storage
-- ✅ **Large Files**: Support for files up to 6GB
-- ✅ **Privacy-First**: Optional encryption, you own your data
-- ✅ **Generous Free Tier**: 500MB free storage for 6 months
+**Live:** [aeter-eight.vercel.app](https://aeter-eight.vercel.app)
 
 ---
 
-## 📦 Tech Stack
+## How It Works
 
-- **Frontend**: Next.js 15 + React 19 + TypeScript
-- **Styling**: Tailwind CSS
-- **Storage**: Arweave (via Irys on Base Sepolia)
-- **Authentication**: Supabase (optional, not yet implemented)
-- **Payments**: Stripe (optional, not yet implemented)
+1. User drops a file on the homepage
+2. Server uploads the file to Irys (which stores it on Arweave)
+3. User gets a permanent URL
+4. Optionally sign in to save the file to a dashboard
+
+Anonymous users get 3 free uploads per session (configurable). After that, they're prompted to create an account.
 
 ---
 
-## 🏗️ Project Structure
+## Tech Stack
+
+- **Framework:** Next.js 15 (App Router) + TypeScript + React 19
+- **Storage:** Irys devnet -> Arweave blockchain
+- **Auth:** Supabase (Google/GitHub OAuth) -- optional, app works without it
+- **Admin settings:** Vercel KV (Redis) -- optional, falls back to env vars
+- **Styling:** Tailwind CSS + Space Mono font
+- **Icons:** Lucide React
+- **Deployment:** Vercel
+
+---
+
+## Project Structure
 
 ```
-aeter/
-├── app/
-│   ├── api/
-│   │   └── upload/
-│   │       └── irys/
-│   │           └── route.ts          # Irys upload API endpoint
-│   ├── components/
-│   │   └── UploadInterface.tsx       # File upload component
-│   ├── dashboard/
-│   │   └── page.tsx                  # File management dashboard
-│   ├── pricing/
-│   │   └── page.tsx                  # Pricing page
+next.config.ts                        # Image optimization for Irys/Arweave domains
+app/
+├── api/
 │   ├── upload/
-│   │   └── page.tsx                  # Upload page
-│   ├── globals.css                   # Global styles
-│   ├── layout.tsx                    # Root layout
-│   └── page.tsx                      # Homepage
-├── .env.local                        # Environment variables (DO NOT COMMIT)
-├── .env.example                      # Example environment variables
-├── package.json
-├── tsconfig.json
-└── README.md
+│   │   ├── irys/route.ts          # Main upload endpoint
+│   │   └── check-limit/route.ts   # Check remaining anonymous uploads
+│   ├── admin/
+│   │   ├── login/route.ts         # Admin password auth
+│   │   ├── logout/route.ts        # Clear admin session
+│   │   ├── irys-balance/route.ts  # Wallet & Irys balance
+│   │   ├── settings/route.ts      # GET/PUT app settings
+│   │   └── reset-limit/route.ts   # Clear rate limit cookie
+│   └── auth/
+│       └── callback/route.ts      # OAuth callback + file claiming
+├── components/
+│   ├── NavBar.tsx                  # Auth-aware navigation
+│   ├── HomeUploadHero.tsx          # Homepage upload widget (drag & drop)
+│   ├── UploadInterface.tsx         # Dedicated upload page widget
+│   ├── AuthProvider.tsx            # Supabase auth context
+│   ├── AuthModal.tsx               # OAuth sign-in modal
+│   ├── PortfolioShowcase.tsx       # Example uploads gallery
+│   └── SavingsCalculator.tsx       # Cost comparison calculator
+├── lib/
+│   ├── admin-auth.ts              # HMAC-signed admin cookies
+│   ├── upload-limiter.ts          # HMAC-signed rate limit cookies
+│   ├── settings.ts                # KV -> env -> defaults fallback
+│   ├── supabase.ts                # Client-side Supabase
+│   └── supabase-server.ts         # Server-side Supabase
+├── admin/page.tsx                  # Admin dashboard
+├── dashboard/page.tsx              # User file dashboard
+├── pricing/page.tsx                # Pricing page
+├── calculator/page.tsx             # Savings calculator
+├── upload/page.tsx                 # Dedicated upload page
+├── showcase/page.tsx               # Showcase page
+├── page.tsx                        # Homepage
+├── layout.tsx                      # Root layout (Space Mono font)
+└── globals.css                     # Scanlines, glows, animations
 ```
 
 ---
 
-## ⚙️ Setup Instructions
-
-### 1. Install Dependencies
-
-```bash
-cd aeter
-npm install
-```
-
-### 2. Configure Environment Variables
-
-Copy `.env.example` to `.env.local` and fill in your credentials:
-
-```bash
-cp .env.example .env.local
-```
-
-Edit `.env.local`:
+## Environment Variables
 
 ```env
-# Supabase (optional, for user auth & metadata)
-NEXT_PUBLIC_SUPABASE_URL=your_supabase_url_here
-NEXT_PUBLIC_SUPABASE_ANON_KEY=your_supabase_anon_key_here
+# Required
+PRIVATE_KEY=<ethereum-private-key-without-0x>
+SEPOLIA_RPC=<alchemy-or-infura-sepolia-rpc-url>
+ADMIN_PASSWORD=<admin-panel-password>
 
-# Irys Upload (REQUIRED)
-PRIVATE_KEY=your_ethereum_private_key_here
-SEPOLIA_RPC=https://eth-sepolia.g.alchemy.com/v2/your_api_key_here
+# Optional -- Supabase (enables auth + dashboard)
+NEXT_PUBLIC_SUPABASE_URL=<supabase-project-url>
+NEXT_PUBLIC_SUPABASE_ANON_KEY=<supabase-anon-key>
 
-# Stripe (optional, for payments)
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=your_stripe_publishable_key
-STRIPE_SECRET_KEY=your_stripe_secret_key
+# Optional -- Vercel KV (enables editable settings in admin)
+KV_REST_API_URL=<vercel-kv-url>
+KV_REST_API_TOKEN=<vercel-kv-token>
+
+# Optional -- defaults, overridden by admin panel if KV is linked
+MAX_ANONYMOUS_UPLOADS=3
+MAX_FILE_SIZE_MB=6144
+LINK_EXPIRY_DAYS=14
 ```
 
-**Getting Irys Credentials:**
+---
 
-1. **Private Key**: Any Ethereum wallet private key (NEVER SHARE THIS)
-   - Create a new wallet on Base Sepolia testnet
-   - Export the private key (without the `0x` prefix)
-
-2. **Sepolia RPC**: Get a free Alchemy API key
-   - Sign up at [alchemy.com](https://www.alchemy.com/)
-   - Create a new app on "Base Sepolia" network
-   - Copy the HTTPS URL
-
-3. **Fund your wallet** with Base Sepolia ETH:
-   - Get free testnet ETH from [Alchemy faucet](https://sepoliafaucet.com/)
-
-### 3. Run the Development Server
+## Running Locally
 
 ```bash
+npm install
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to view the app.
+Open [localhost:3000](http://localhost:3000).
 
 ---
 
-## 🎯 Usage
+## Admin Panel
 
-### Upload Files
+Access at `/admin`. Password is whatever you set in `ADMIN_PASSWORD`.
 
-1. Navigate to `/upload` or click "Upload Now" from homepage
-2. Select a file (up to 6GB)
-3. Click "Upload to Arweave"
-4. Wait for upload to complete
-5. Copy the permanent URL to access your file
-
-### View Files
-
-1. Navigate to `/dashboard`
-2. View all your uploaded files
-3. Download, copy URL, or remove files from dashboard
-
-**Note:** Files remain eternally accessible on Arweave even if removed from your dashboard.
+Features:
+- **Balances** -- Irys devnet balance (upload budget) and Sepolia wallet balance
+- **Settings** -- Edit anonymous upload limit, max file size, link expiry (requires Vercel KV)
+- **Upload** -- Upload files with no rate limits
+- **Reset limit cookie** -- Clear the anonymous upload counter for your browser
 
 ---
 
-## 💰 Pricing Model
+## Rate Limiting
 
-| Tier | Storage | Price | Features |
-|------|---------|-------|----------|
-| **Free** | 500MB | $0 | 6 months on testnet, 25MB/file limit |
-| **Starter** | 10GB | $5/mo or $50/yr | Permanent, 100MB/file limit |
-| **Pro** | 50GB | $15/mo or $150/yr | Priority uploads, custom domain, 500MB/file |
-| **Creator** | 200GB | $30/mo or $300/yr | 3GB video files, NFT API, analytics |
-| **Enterprise** | Unlimited | Custom | White-label, SLA, dedicated support |
+Anonymous uploads are tracked with HMAC-signed httpOnly cookies (30-day TTL). The count can't be tampered with client-side because the cookie value includes a signature derived from `ADMIN_PASSWORD`.
+
+Admin users bypass rate limits entirely (checked via the `admin_token` cookie).
 
 ---
 
-## 🛣️ Roadmap
+## Upload Flow
 
-**MVP (Current)**
-- [x] File upload interface
-- [x] Irys integration for Arweave storage
-- [x] Pricing page with AETER tiers
-- [x] Basic dashboard
-- [x] AETER branding
+```
+Client (FormData)
+  -> POST /api/upload/irys
+  -> Validate file size + rate limit
+  -> Create Irys uploader (Ethereum wallet from PRIVATE_KEY)
+  -> Check Irys balance
+  -> Upload to Irys with metadata tags
+  -> [If Supabase] Store in files table + generate claim token
+  -> Return { url, claimToken, filename, size }
 
-**V2 (Next 4 weeks)**
-- [ ] Supabase authentication
-- [ ] Persistent file storage in database
-- [ ] Stripe payment integration
-- [ ] File encryption option
-- [ ] Tier-based file size limits
-
-**V3 (Next 8 weeks)**
-- [ ] NFT metadata API
-- [ ] Analytics dashboard
-- [ ] Custom domains for Pro tier
-- [ ] API access for developers
-- [ ] White-label solution for Enterprise
+Client shows URL with copy/open buttons
+  -> [If anonymous] "Sign in to claim this file"
+  -> OAuth -> /auth/callback?claim_token=...
+  -> File associated with user -> visible in /dashboard
+```
 
 ---
 
-## 🤝 Contributing
+## Auth
 
-This is currently a solo project, but contributions are welcome! To contribute:
+Supabase is optional. Without it, the app runs in "demo mode":
+- Uploads still work (stored on Irys/Arweave)
+- No user accounts, no dashboard
+- The "Log in" button in the nav is hidden
+- Anonymous upload links are shown once (ephemeral -- stored in React state only)
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-MIT License - see LICENSE file for details
+With Supabase configured:
+- Google and GitHub OAuth
+- Files tracked in a `files` table
+- Dashboard shows all uploaded files with expiry status
+- Anonymous uploads can be claimed after signing in
 
 ---
 
-## 🙏 Acknowledgments
+## Deployment
 
-- Built on [Arweave](https://arweave.org) - Permanent decentralized storage
-- Powered by [Irys](https://irys.xyz) - Fast Arweave uploads
-- Uses [Base Sepolia](https://base.org) testnet for free storage
+Deployed on Vercel. Push to main or run:
 
----
+```bash
+vercel --prod
+```
 
-## 📞 Support
-
-- **Issues**: Open an issue on GitHub
-- **Email**: hello@aeter.space (placeholder)
-- **Website**: aeter.space (coming soon)
+Env vars must be set in the Vercel dashboard. If using Vercel KV, link a KV store to the project -- `KV_REST_API_URL` and `KV_REST_API_TOKEN` are auto-injected.
 
 ---
 
-## 🚨 Important Notes
+## Wallet
 
-1. **Testnet vs Mainnet**: Currently using Base Sepolia (testnet). For production, migrate to Arweave mainnet.
-2. **Private Key Security**: NEVER commit your `.env.local` file. Keep your private key secret.
-3. **File Permanence**: Once uploaded to Arweave, files CANNOT be deleted. Use with caution.
-4. **Free Storage Limitations**: Irys testnet offers 6 months free storage, after which users need to upgrade to paid tiers.
+Address: `0x23de198F1520ad386565fc98AEE6abb3Ae5052BE`
+
+Funded with Sepolia ETH, used to pay for Irys devnet uploads. Private key lives in the `PRIVATE_KEY` env var. Never committed to the repo.
 
 ---
 
-**Built with 🌌 for eternal digital permanence**
+## Security Notes
+
+- Admin auth uses HMAC-SHA256 signed cookies with 24h TTL
+- Rate limit cookies are HMAC-signed to prevent count tampering
+- Private key only used server-side for Irys uploads
+- File size validated before upload
+- `.env.local` is gitignored
+- Once uploaded to Arweave, files cannot be deleted
+
+---
+
+## Dependencies
+
+| Package | Purpose |
+|---------|---------|
+| `next` | Framework (v15) |
+| `react` | UI (v19) |
+| `@irys/upload` + `@irys/upload-ethereum` | Arweave uploads via Irys |
+| `@supabase/supabase-js` + `@supabase/ssr` | Auth & database (optional) |
+| `@vercel/kv` | Admin settings persistence (optional) |
+| `tailwindcss` | Styling |
+| `framer-motion` | Animations |
+| `lucide-react` | Icons |
+| `zustand` | State management |

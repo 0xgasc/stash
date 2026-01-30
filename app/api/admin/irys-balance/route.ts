@@ -1,3 +1,14 @@
+/**
+ * GET /api/admin/irys-balance
+ *
+ * Returns the Irys devnet balance and Sepolia on-chain wallet balance
+ * for the server's Ethereum wallet (derived from PRIVATE_KEY).
+ *
+ * Requires admin authentication via HMAC-signed httpOnly cookie.
+ * Both balances are returned in wei and human-readable ETH.
+ *
+ * Used by the /admin dashboard to monitor upload budget.
+ */
 import { NextResponse } from 'next/server'
 import { isAdminAuthenticated } from '@/app/lib/admin-auth'
 import { Wallet } from '@ethersproject/wallet'

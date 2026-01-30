@@ -1,3 +1,10 @@
+/**
+ * POST /api/admin/login
+ *
+ * Authenticates admin users via password. Validates against the
+ * ADMIN_PASSWORD env var, then sets an HMAC-signed httpOnly cookie
+ * (`admin_token`) with a 24-hour TTL.
+ */
 import { NextRequest, NextResponse } from 'next/server'
 import { createToken } from '@/app/lib/admin-auth'
 

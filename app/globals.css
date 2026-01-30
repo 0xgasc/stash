@@ -3,21 +3,66 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+  --background: #050505;
+  --foreground: #ededed;
 }
 
 body {
   color: var(--foreground);
   background: var(--background);
-  font-family: Arial, Helvetica, sans-serif;
+}
+
+/* Scanline overlay — subtle CRT effect */
+.scanlines {
+  position: relative;
+}
+.scanlines::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(125, 211, 192, 0.01) 2px,
+    rgba(125, 211, 192, 0.01) 4px
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* Subtle text glow */
+.text-glow {
+  text-shadow: 0 0 8px rgba(125, 211, 192, 0.3);
+}
+
+/* Border glow on hover */
+.border-glow:hover {
+  box-shadow: 0 0 10px rgba(125, 211, 192, 0.1);
+}
+
+/* Flicker animation for subtle cyberpunk feel */
+@keyframes flicker {
+  0%, 100% { opacity: 1; }
+  92% { opacity: 1; }
+  93% { opacity: 0.8; }
+  94% { opacity: 1; }
+  96% { opacity: 0.9; }
+  97% { opacity: 1; }
+}
+
+.animate-flicker {
+  animation: flicker 4s infinite;
+}
+
+/* Pulse glow for active elements */
+@keyframes pulse-glow {
+  0%, 100% { box-shadow: 0 0 5px rgba(0, 255, 240, 0.2); }
+  50% { box-shadow: 0 0 20px rgba(0, 255, 240, 0.4); }
+}
+
+.animate-pulse-glow {
+  animation: pulse-glow 2s ease-in-out infinite;
 }
 
 @layer utilities {

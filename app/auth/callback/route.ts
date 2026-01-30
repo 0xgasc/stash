@@ -1,3 +1,11 @@
+/**
+ * GET /auth/callback
+ *
+ * OAuth redirect handler for Supabase authentication. Exchanges the
+ * OAuth code for a session, and if a `claim_token` query param is
+ * present, associates the anonymous upload with the newly
+ * authenticated user and updates their storage quota.
+ */
 import { createServerSupabaseClient } from '@/app/lib/supabase-server'
 import { NextRequest, NextResponse } from 'next/server'
 
