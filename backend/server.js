@@ -24,6 +24,9 @@ const { uploadFileToIrysFromPath } = require('./utils/irysUploader');
 const app = express();
 const PORT = process.env.PORT || 5050;
 
+// Trust reverse proxy (Railway, Render, etc.) — required for express-rate-limit
+app.set('trust proxy', 1);
+
 // =====================================================
 // TUS UPLOAD DIRECTORY
 // =====================================================
