@@ -4,7 +4,7 @@
  * Called by the frontend after a successful TUS upload to increment
  * the anonymous upload counter cookie. Since the upload now goes to
  * a separate Express server, this Vercel-side endpoint handles the
- * cookie increment that was previously done in the /api/upload/irys route.
+ * cookie increment on the Vercel side after each successful upload.
  */
 import { NextRequest, NextResponse } from 'next/server'
 import { isAdminAuthenticated } from '@/app/lib/admin-auth'

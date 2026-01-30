@@ -2,16 +2,19 @@
  * UploadInterface — Drag-and-drop upload widget with file preview.
  *
  * Used on the /upload page. Supports drag-and-drop and click-to-select,
- * shows image/video previews, upload progress, permanent URL with
- * copy/open buttons, rate limit messaging, and an auth prompt for
- * anonymous users to claim their upload.
+ * shows image/video previews, upload progress via TUS resumable protocol,
+ * permanent URL with copy/open buttons, rate limit messaging, and an
+ * auth prompt for anonymous users to claim their upload.
  */
 'use client'
 
 import { useState, useEffect } from 'react'
 import { Upload, X, Check, Loader2, FileIcon, AlertCircle } from 'lucide-react'
+import * as tus from 'tus-js-client'
 import AuthModal from './AuthModal'
 import { useAuth } from './AuthProvider'
+
+const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
 interface UploadInterfaceProps {
   onUploadComplete?: (url: string, fileInfo: FileInfo) => void
@@ -32,6 +35,14 @@ interface UploadLimit {
   maxFileSizeMB: number
 }
 
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 Bytes'
+  const k = 1024
+  const sizes = ['Bytes', 'KB', 'MB', 'GB']
+  const i = Math.floor(Math.log(bytes) / Math.log(k))
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+}
+
 export default function UploadInterface({ onUploadComplete }: UploadInterfaceProps) {
   const { user } = useAuth()
   const [uploading, setUploading] = useState(false)
@@ -39,6 +50,7 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
   const [file, setFile] = useState<File | null>(null)
   const [uploadedUrl, setUploadedUrl] = useState<string | null>(null)
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [uploadStage, setUploadStage] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [uploadLimit, setUploadLimit] = useState<UploadLimit | null>(null)
   const [showAuthModal, setShowAuthModal] = useState(false)
@@ -57,7 +69,7 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
     if (selectedFile) {
       const maxSizeBytes = (uploadLimit?.maxFileSizeMB ?? 6144) * 1024 * 1024
       if (selectedFile.size > maxSizeBytes) {
-        setError(`File too large. Maximum size is ${((uploadLimit?.maxFileSizeMB ?? 6144) / 1024).toFixed(0)}GB. Your file is ${(selectedFile.size / 1024 / 1024 / 1024).toFixed(2)}GB.`)
+        setError(`File too large. Maximum size is ${((uploadLimit?.maxFileSizeMB ?? 6144) / 1024).toFixed(0)}GB.`)
         e.target.value = ''
         return
       }
@@ -77,43 +89,126 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
     }
   }
 
-  const uploadToIrys = async () => {
+  const uploadFile = async () => {
     if (!file) return
 
     setUploading(true)
     setUploadProgress(0)
+    setUploadStage('Starting upload...')
     setError(null)
 
+    // Check rate limit before starting
+    if (!user) {
+      try {
+        const limitRes = await fetch('/api/upload/check-limit')
+        const limitData = await limitRes.json()
+        if (limitData.limitReached) {
+          setUploadLimit({ remaining: 0, limit: limitData.limit, limitReached: true, maxFileSizeMB: limitData.maxFileSizeMB })
+          setError('Upload limit reached. Create an account to continue.')
+          setUploading(false)
+          setUploadProgress(0)
+          return
+        }
+      } catch {
+        // Continue if check fails
+      }
+    }
+
     try {
-      setUploadProgress(10)
+      const result = await new Promise<{ url: string; filename: string; size: number; contentType: string }>((resolve, reject) => {
+        let progressInterval: ReturnType<typeof setInterval> | null = null
 
-      const formData = new FormData()
-      formData.append('file', file)
+        const upload = new tus.Upload(file, {
+          endpoint: `${UPLOAD_SERVER}/tus-upload`,
+          retryDelays: [0, 1000, 3000, 5000, 10000, 30000],
+          chunkSize: 5 * 1024 * 1024,
+          metadata: {
+            filename: file.name,
+            filetype: file.type,
+            filesize: file.size.toString(),
+          },
+          onError: (err) => {
+            if (progressInterval) clearInterval(progressInterval)
+            reject(new Error(`Upload failed: ${err.message}. Your upload can be resumed if you try again.`))
+          },
+          onProgress: (bytesUploaded, bytesTotal) => {
+            const pct = Math.round((bytesUploaded / bytesTotal) * 100)
+            const adjusted = 5 + (pct * 0.65)
+            setUploadProgress(Math.round(adjusted))
+            setUploadStage(`Uploading... ${pct}% (${formatBytes(bytesUploaded)} / ${formatBytes(bytesTotal)})`)
+          },
+          onSuccess: async () => {
+            if (progressInterval) clearInterval(progressInterval)
 
-      setUploadProgress(20)
+            const uploadUrl = upload.url
+            const uploadId = uploadUrl?.split('/').pop()
 
-      const response = await fetch('/api/upload/irys', {
-        method: 'POST',
-        body: formData
+            setUploadProgress(72)
+            setUploadStage('Processing on blockchain...')
+
+            progressInterval = setInterval(() => {
+              setUploadProgress(prev => {
+                if (prev < 95) return prev + Math.random() * 1.5 + 0.3
+                return prev
+              })
+            }, 1500)
+
+            try {
+              const response = await fetch(`${UPLOAD_SERVER}/tus-upload/complete`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  uploadId,
+                  originalFilename: file.name,
+                }),
+              })
+
+              if (progressInterval) clearInterval(progressInterval)
+
+              if (!response.ok) {
+                const errorData = await response.json()
+                reject(new Error(errorData.error || 'Failed to process upload'))
+                return
+              }
+
+              const data = await response.json()
+
+              // Increment rate limit cookie
+              if (!user) {
+                try {
+                  await fetch('/api/upload/increment-limit', { method: 'POST' })
+                } catch {
+                  // Non-critical
+                }
+              }
+
+              resolve({
+                url: data.url,
+                filename: data.filename,
+                size: data.size,
+                contentType: data.contentType || 'application/octet-stream',
+              })
+            } catch (err) {
+              if (progressInterval) clearInterval(progressInterval)
+              reject(err)
+            }
+          },
+        })
+
+        upload.findPreviousUploads().then((previousUploads) => {
+          const valid = previousUploads.filter(
+            (prev) => prev.uploadUrl && !prev.uploadUrl.includes('undefined')
+          )
+          if (valid.length > 0) {
+            setUploadStage('Resuming previous upload...')
+            upload.resumeFromPreviousUpload(valid[0])
+          }
+          upload.start()
+        })
       })
 
-      setUploadProgress(80)
-
-      const result = await response.json()
-
-      if (response.status === 429 && result.limitReached) {
-        setUploadLimit({ remaining: 0, limit: result.limit, limitReached: true, maxFileSizeMB: uploadLimit?.maxFileSizeMB ?? 6144 })
-        setError('Upload limit reached. Create an account to continue.')
-        setUploading(false)
-        setUploadProgress(0)
-        return
-      }
-
-      if (!response.ok) {
-        throw new Error(result.details || result.error || 'Upload failed')
-      }
-
       setUploadProgress(100)
+      setUploadStage('Complete')
       setUploadedUrl(result.url)
 
       // Refresh limit
@@ -124,25 +219,20 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
           .catch(() => {})
       }
 
-      const fileInfo: FileInfo = {
-        url: result.url,
-        filename: result.filename,
-        size: result.size,
-        contentType: result.contentType,
-        uploadedAt: new Date().toISOString()
-      }
-
       if (onUploadComplete) {
-        onUploadComplete(result.url, fileInfo)
+        onUploadComplete(result.url, {
+          url: result.url,
+          filename: result.filename,
+          size: result.size,
+          contentType: result.contentType,
+          uploadedAt: new Date().toISOString(),
+        })
       }
-
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      setError(errorMessage)
-    } finally {
-      setUploading(false)
-      setUploadProgress(0)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Upload failed')
     }
+
+    setUploading(false)
   }
 
   const resetUpload = () => {
@@ -150,6 +240,7 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
     setPreview(null)
     setUploadedUrl(null)
     setError(null)
+    setUploadStage('')
   }
 
   // Limit reached state (no file selected yet)
@@ -260,9 +351,7 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
               </div>
               <div className="flex justify-between items-center text-sm">
                 <span className="text-gray-500">Size</span>
-                <span className="text-white">
-                  {(file.size / 1024 / 1024).toFixed(2)} MB
-                </span>
+                <span className="text-white">{formatBytes(file.size)}</span>
               </div>
             </div>
 
@@ -270,8 +359,8 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
             {uploading && (
               <div className="bg-black border border-gray-800 p-4">
                 <div className="flex items-center justify-between mb-2 text-sm">
-                  <span className="text-gray-500">Uploading...</span>
-                  <span className="text-white">{uploadProgress}%</span>
+                  <span className="text-gray-500">{uploadStage || 'Uploading...'}</span>
+                  <span className="text-white">{Math.round(uploadProgress)}%</span>
                 </div>
                 <div className="w-full bg-gray-800 h-1">
                   <div
@@ -313,7 +402,7 @@ export default function UploadInterface({ onUploadComplete }: UploadInterfacePro
               {!uploadedUrl ? (
                 <>
                   <button
-                    onClick={uploadToIrys}
+                    onClick={uploadFile}
                     disabled={uploading}
                     className="flex-1 bg-white hover:bg-gray-200 text-black font-medium py-2 px-4 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
                   >

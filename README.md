@@ -27,7 +27,8 @@ Anonymous users get 3 free uploads per session (configurable). After that, they'
 - **Admin settings:** Vercel KV (Redis) -- optional, falls back to env vars
 - **Styling:** Tailwind CSS + Space Mono font
 - **Icons:** Lucide React
-- **Deployment:** Vercel
+- **Upload server:** Express + TUS protocol (separate backend on Railway)
+- **Deployment:** Vercel (frontend) + Railway (upload backend)
 
 ---
 
@@ -38,8 +39,8 @@ next.config.ts                        # Image optimization for Irys/Arweave doma
 app/
 ├── api/
 │   ├── upload/
-│   │   ├── irys/route.ts          # Main upload endpoint
-│   │   └── check-limit/route.ts   # Check remaining anonymous uploads
+│   │   ├── check-limit/route.ts   # Check remaining anonymous uploads
+│   │   └── increment-limit/route.ts # Increment upload counter after TUS upload
 │   ├── admin/
 │   │   ├── login/route.ts         # Admin password auth
 │   │   ├── logout/route.ts        # Clear admin session
@@ -71,6 +72,11 @@ app/
 ├── page.tsx                        # Homepage
 ├── layout.tsx                      # Root layout (Space Mono font)
 └── globals.css                     # Scanlines, glows, animations
+backend/
+├── server.js                         # Express + TUS upload server
+├── utils/irysUploader.js             # Irys upload logic (file → Arweave)
+├── package.json
+└── .env                              # Backend env vars (not committed)
 ```
 
 ---
@@ -91,6 +97,9 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=<supabase-anon-key>
 KV_REST_API_URL=<vercel-kv-url>
 KV_REST_API_TOKEN=<vercel-kv-token>
 
+# Upload backend (separate Express server)
+NEXT_PUBLIC_UPLOAD_SERVER=https://your-railway-url.up.railway.app
+
 # Optional -- defaults, overridden by admin panel if KV is linked
 MAX_ANONYMOUS_UPLOADS=3
 MAX_FILE_SIZE_MB=6144
@@ -102,11 +111,17 @@ LINK_EXPIRY_DAYS=14
 ## Running Locally
 
 ```bash
+# Frontend (Next.js)
 npm install
 npm run dev
+
+# Upload backend (separate terminal)
+cd backend
+npm install
+node server.js
 ```
 
-Open [localhost:3000](http://localhost:3000).
+Frontend runs on [localhost:3000](http://localhost:3000), upload backend on [localhost:5050](http://localhost:5050).
 
 ---
 
@@ -133,20 +148,22 @@ Admin users bypass rate limits entirely (checked via the `admin_token` cookie).
 ## Upload Flow
 
 ```
-Client (FormData)
-  -> POST /api/upload/irys
-  -> Validate file size + rate limit
-  -> Create Irys uploader (Ethereum wallet from PRIVATE_KEY)
-  -> Check Irys balance
-  -> Upload to Irys with metadata tags
-  -> [If Supabase] Store in files table + generate claim token
-  -> Return { url, claimToken, filename, size }
+Client (tus-js-client, 5MB chunks)
+  -> TUS protocol to Express backend (Railway)
+  -> Resumable upload with retry
+  -> On complete: POST /tus-upload/complete
+  -> Backend reads temp file -> uploads to Irys/Arweave
+  -> Returns { url, filename, size }
+  -> Client calls POST /api/upload/increment-limit (Vercel)
+  -> Rate limit cookie incremented
 
 Client shows URL with copy/open buttons
   -> [If anonymous] "Sign in to claim this file"
   -> OAuth -> /auth/callback?claim_token=...
   -> File associated with user -> visible in /dashboard
 ```
+
+The TUS backend runs separately from Vercel to bypass the 4.5MB serverless body limit. Files of any size (up to 6GB) are uploaded in 5MB chunks with automatic resume on failure.
 
 ---
 
@@ -168,13 +185,14 @@ With Supabase configured:
 
 ## Deployment
 
-Deployed on Vercel. Push to main or run:
+**Frontend:** Vercel (auto-deploys from GitHub)
+**Upload backend:** Railway (auto-deploys from `backend/` directory)
 
-```bash
-vercel --prod
-```
+Vercel env vars: `PRIVATE_KEY`, `SEPOLIA_RPC`, `ADMIN_PASSWORD`, `NEXT_PUBLIC_UPLOAD_SERVER`, and optionally Supabase/KV vars.
 
-Env vars must be set in the Vercel dashboard. If using Vercel KV, link a KV store to the project -- `KV_REST_API_URL` and `KV_REST_API_TOKEN` are auto-injected.
+Railway env vars: `PRIVATE_KEY`, `SEPOLIA_RPC`, `ALLOWED_ORIGINS`, `PORT`.
+
+If using Vercel KV, link a KV store to the project -- `KV_REST_API_URL` and `KV_REST_API_TOKEN` are auto-injected.
 
 ---
 
@@ -203,6 +221,7 @@ Funded with Sepolia ETH, used to pay for Irys devnet uploads. Private key lives 
 |---------|---------|
 | `next` | Framework (v15) |
 | `react` | UI (v19) |
+| `tus-js-client` | TUS resumable upload client |
 | `@irys/upload` + `@irys/upload-ethereum` | Arweave uploads via Irys |
 | `@supabase/supabase-js` + `@supabase/ssr` | Auth & database (optional) |
 | `@vercel/kv` | Admin settings persistence (optional) |
