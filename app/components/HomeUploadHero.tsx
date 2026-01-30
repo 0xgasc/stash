@@ -279,8 +279,8 @@ export default function HomeUploadHero() {
 
           {/* One-time link warning */}
           {!user && (
-            <div className="bg-gray-950 border border-accent-red/30 p-3 mb-4">
-              <p className="text-accent-red text-xs text-center">
+            <div className="bg-gray-950 border border-accent-orange/30 p-3 mb-4">
+              <p className="text-accent-orange text-xs text-center">
                 This link is shown once. Leave this page and it&apos;s gone without an account.
               </p>
             </div>
