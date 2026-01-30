@@ -49,8 +49,9 @@ async function getIrysUploader() {
   if (!privateKey) throw new Error('PRIVATE_KEY not configured');
   if (!sepoliaRpc) throw new Error('SEPOLIA_RPC not configured');
 
-  // Ensure hex key has 0x prefix (required by @irys/upload-ethereum)
-  const key = privateKey.startsWith('0x') ? privateKey : `0x${privateKey}`;
+  // Convert hex string to Buffer (Uint8Array) — secp256k1 requires raw bytes
+  const hexKey = privateKey.replace(/^0x/, '');
+  const key = Buffer.from(hexKey, 'hex');
 
   const uploader = await Uploader(Ethereum)
     .withWallet(key)
