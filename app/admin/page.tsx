@@ -14,6 +14,9 @@ import { useState } from 'react'
 import Link from 'next/link'
 import * as tus from 'tus-js-client'
 import { Loader2, RefreshCw, Lock, Wallet, Database, LogOut, Settings, Save, AlertTriangle, Upload, CheckCircle, Copy, ExternalLink, RotateCcw } from 'lucide-react'
+import UploadStats from './components/UploadStats'
+import UploadHistory from './components/UploadHistory'
+import ApiKeyManager from './components/ApiKeyManager'
 
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
@@ -682,6 +685,11 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+
+        {/* Stats, Upload History, and API Keys */}
+        <UploadStats authenticated={authenticated} />
+        <UploadHistory authenticated={authenticated} />
+        <ApiKeyManager authenticated={authenticated} />
       </main>
     </div>
   )

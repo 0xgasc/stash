@@ -1,0 +1,268 @@
+/**
+ * Stash API v1 routes.
+ *
+ * Programmatic upload, upload history, re-upload, stats, and API key management.
+ */
+const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const os = require('os');
+const fs = require('fs');
+const crypto = require('crypto');
+const rateLimit = require('express-rate-limit');
+
+const {
+  insertUpload, getUploads, getUploadById, getUploadByReuploadToken,
+  updateUploadAfterReupload, insertApiKey, getApiKeys, deactivateApiKey, getStats,
+} = require('../db');
+const { uploadFileToIrysFromPath } = require('../utils/irysUploader');
+const { requireApiKey, requireAdminSecret, requireAuth } = require('../middleware/apiAuth');
+
+const router = express.Router();
+
+// JSON body parser for non-multipart routes
+router.use(express.json());
+
+// Multer for file uploads — store in temp dir
+const upload = multer({
+  dest: path.join(os.tmpdir(), 'stash-api-uploads'),
+  limits: { fileSize: 6 * 1024 * 1024 * 1024 }, // 6GB
+});
+
+// Rate limiter for programmatic uploads
+const apiUploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 60,
+  keyGenerator: (req) => req.apiKey?.name || 'anon',
+  message: { error: 'Upload rate limit exceeded, try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { ip: false },
+});
+
+// Rate limiter for public re-upload
+const reuploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => req.params.token || 'anon',
+  message: { error: 'Re-upload rate limit exceeded, try again later' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { ip: false },
+});
+
+// =====================================================
+// POST /upload — Programmatic file upload
+// =====================================================
+router.post('/upload', requireApiKey, apiUploadLimiter, upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file provided. Send as multipart form-data with field name "file"' });
+  }
+
+  const filePath = req.file.path;
+  const originalFilename = req.file.originalname;
+  const source = req.body.source || req.apiKey.name;
+  const description = req.body.description || null;
+
+  try {
+    console.log(`📤 API upload: ${originalFilename} from ${source}`);
+
+    const result = await uploadFileToIrysFromPath(filePath, originalFilename);
+
+    const record = insertUpload({
+      source,
+      filename: result.filename,
+      content_type: result.contentType,
+      size: result.size,
+      description,
+      irys_url: result.url,
+      arweave_id: result.id,
+      ar_url: result.arUrl,
+      api_key_id: req.apiKey.id,
+    });
+
+    // Cleanup temp file
+    try { fs.unlinkSync(filePath); } catch {}
+
+    console.log(`✅ API upload complete: ${result.url}`);
+
+    res.json({
+      success: true,
+      upload: {
+        uuid: record.uuid,
+        filename: record.filename,
+        size: record.size,
+        content_type: record.content_type,
+        source: record.source,
+        description: record.description,
+        irys_url: record.irys_url,
+        arweave_id: record.arweave_id,
+        ar_url: record.ar_url,
+        reupload_token: record.reupload_token,
+        reupload_url: `/api/v1/reupload/${record.reupload_token}`,
+        created_at: record.created_at,
+      },
+    });
+  } catch (error) {
+    // Cleanup on failure
+    try { fs.unlinkSync(filePath); } catch {}
+    console.error('❌ API upload error:', error.message);
+    res.status(500).json({ error: 'Upload failed', details: error.message });
+  }
+});
+
+// =====================================================
+// GET /uploads — List uploads (paginated)
+// =====================================================
+router.get('/uploads', requireAuth, (req, res) => {
+  const page = parseInt(req.query.page) || 1;
+  const limit = parseInt(req.query.limit) || 50;
+  const source = req.query.source || undefined;
+  const search = req.query.search || undefined;
+
+  const result = getUploads({ page, limit, source, search });
+  res.json(result);
+});
+
+// =====================================================
+// GET /uploads/:uuid — Single upload detail
+// =====================================================
+router.get('/uploads/:uuid', requireAuth, (req, res) => {
+  const upload = getUploadById(req.params.uuid);
+  if (!upload) {
+    return res.status(404).json({ error: 'Upload not found' });
+  }
+  res.json({ upload });
+});
+
+// =====================================================
+// POST /uploads/:uuid/reupload — Re-upload (authenticated)
+// =====================================================
+router.post('/uploads/:uuid/reupload', requireAuth, async (req, res) => {
+  const record = getUploadById(req.params.uuid);
+  if (!record) {
+    return res.status(404).json({ error: 'Upload not found' });
+  }
+
+  try {
+    const result = await reuploadFromExisting(record);
+    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id);
+    res.json({ success: true, upload: updated });
+  } catch (error) {
+    console.error('❌ Re-upload error:', error.message);
+    res.status(500).json({ error: 'Re-upload failed', details: error.message });
+  }
+});
+
+// =====================================================
+// POST /reupload/:token — Re-upload via token (public)
+// =====================================================
+router.post('/reupload/:token', reuploadLimiter, upload.single('file'), async (req, res) => {
+  const record = getUploadByReuploadToken(req.params.token);
+  if (!record) {
+    return res.status(404).json({ error: 'Invalid re-upload token' });
+  }
+
+  try {
+    let result;
+
+    // If a file was provided, use it directly
+    if (req.file) {
+      result = await uploadFileToIrysFromPath(req.file.path, record.filename);
+      try { fs.unlinkSync(req.file.path); } catch {}
+    } else {
+      // Try fetching from existing URL
+      result = await reuploadFromExisting(record);
+    }
+
+    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id);
+    res.json({ success: true, upload: updated });
+  } catch (error) {
+    if (req.file) {
+      try { fs.unlinkSync(req.file.path); } catch {}
+    }
+    console.error('❌ Token re-upload error:', error.message);
+    res.status(500).json({ error: 'Re-upload failed', details: error.message });
+  }
+});
+
+// =====================================================
+// GET /stats — Upload statistics
+// =====================================================
+router.get('/stats', requireAuth, (req, res) => {
+  const stats = getStats();
+  res.json(stats);
+});
+
+// =====================================================
+// API KEY MANAGEMENT (admin only)
+// =====================================================
+router.post('/api-keys', requireAdminSecret, (req, res) => {
+  const { name } = req.body;
+  if (!name || typeof name !== 'string' || name.trim().length === 0) {
+    return res.status(400).json({ error: 'Name is required' });
+  }
+
+  const result = insertApiKey(name.trim());
+  res.json({
+    success: true,
+    api_key: {
+      key: result.key, // Full key — shown only once
+      name: result.name,
+      prefix: result.key_prefix,
+    },
+  });
+});
+
+router.get('/api-keys', requireAdminSecret, (req, res) => {
+  const keys = getApiKeys();
+  res.json({ api_keys: keys });
+});
+
+router.delete('/api-keys/:id', requireAdminSecret, (req, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid key ID' });
+  }
+  deactivateApiKey(id);
+  res.json({ success: true });
+});
+
+// =====================================================
+// HELPER — Fetch existing file and re-upload
+// =====================================================
+async function reuploadFromExisting(record) {
+  const urls = [record.irys_url, `https://arweave.net/${record.arweave_id}`];
+
+  let buffer = null;
+  for (const url of urls) {
+    try {
+      console.log(`🔄 Attempting to fetch from: ${url}`);
+      const response = await fetch(url);
+      if (response.ok) {
+        buffer = Buffer.from(await response.arrayBuffer());
+        console.log(`✅ Fetched ${buffer.length} bytes from ${url}`);
+        break;
+      }
+    } catch (err) {
+      console.log(`⚠️ Failed to fetch from ${url}: ${err.message}`);
+    }
+  }
+
+  if (!buffer) {
+    throw new Error('Could not fetch original file from any gateway. Please provide the file in the request body.');
+  }
+
+  // Write to temp file and upload
+  const tmpPath = path.join(os.tmpdir(), `stash-reupload-${crypto.randomUUID()}`);
+  fs.writeFileSync(tmpPath, buffer);
+
+  try {
+    const result = await uploadFileToIrysFromPath(tmpPath, record.filename);
+    return result;
+  } finally {
+    try { fs.unlinkSync(tmpPath); } catch {}
+  }
+}
+
+module.exports = router;

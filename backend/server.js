@@ -20,6 +20,8 @@ const os = require('os');
 const fs = require('fs');
 
 const { uploadFileToIrysFromPath } = require('./utils/irysUploader');
+const { insertUpload } = require('./db');
+const apiRoutes = require('./routes/api');
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -96,6 +98,8 @@ app.use(cors({
   allowedHeaders: [
     'Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin',
     'Cache-Control', 'Pragma',
+    // Auth headers
+    'X-API-Key', 'X-Admin-Secret',
     // TUS protocol headers
     'Upload-Length', 'Upload-Offset', 'Tus-Resumable', 'Upload-Metadata',
     'Upload-Defer-Length', 'Upload-Concat', 'X-HTTP-Method-Override',
@@ -113,6 +117,9 @@ app.use(compression());
 
 // Body parser for the /complete endpoint only (TUS handles its own bodies)
 app.use('/tus-upload/complete', express.json());
+
+// Mount API v1 routes
+app.use('/api/v1', apiRoutes);
 
 // Rate limiting
 const uploadLimiter = rateLimit({
@@ -213,6 +220,17 @@ app.post('/tus-upload/complete', async (req, res) => {
           console.error('⚠️ Cleanup failed:', cleanupError.message);
         }
 
+        // Record in database
+        const dbRecord = insertUpload({
+          source: req.body.source || 'web',
+          filename: result.filename,
+          content_type: result.contentType,
+          size: result.size || stat.size,
+          irys_url: result.url,
+          arweave_id: result.id,
+          ar_url: result.arUrl,
+        });
+
         return res.json({
           success: true,
           url: result.url,
@@ -221,6 +239,8 @@ app.post('/tus-upload/complete', async (req, res) => {
           size: result.size || stat.size,
           contentType: result.contentType,
           filename: result.filename,
+          uuid: dbRecord.uuid,
+          reuploadToken: dbRecord.reupload_token,
         });
       }
 
@@ -266,6 +286,17 @@ app.post('/tus-upload/complete', async (req, res) => {
 
     completedTusUploads.delete(uploadId);
 
+    // Record in database
+    const dbRecord = insertUpload({
+      source: req.body.source || 'web',
+      filename: result.filename,
+      content_type: result.contentType,
+      size: result.size,
+      irys_url: result.url,
+      arweave_id: result.id,
+      ar_url: result.arUrl,
+    });
+
     res.json({
       success: true,
       url: result.url,
@@ -274,6 +305,8 @@ app.post('/tus-upload/complete', async (req, res) => {
       size: result.size,
       contentType: result.contentType,
       filename: result.filename,
+      uuid: dbRecord.uuid,
+      reuploadToken: dbRecord.reupload_token,
     });
   } catch (error) {
     console.error('❌ Tus completion error:', error);
