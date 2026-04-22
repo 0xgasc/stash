@@ -70,12 +70,23 @@ if (currentVersion < 1) {
   console.log('✅ Database initialized (v1)');
 }
 
+if (currentVersion < 2) {
+  db.exec(`
+    ALTER TABLE uploads ADD COLUMN ip_address TEXT;
+    ALTER TABLE uploads ADD COLUMN user_agent TEXT;
+    ALTER TABLE uploads ADD COLUMN referer TEXT;
+    CREATE INDEX IF NOT EXISTS idx_uploads_ip_address ON uploads(ip_address);
+  `);
+  db.pragma('user_version = 2');
+  console.log('✅ Database migrated to v2 (ip/ua/referer)');
+}
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
 const _insertUpload = db.prepare(`
-  INSERT INTO uploads (uuid, source, filename, content_type, size, description, irys_url, arweave_id, ar_url, reupload_token, api_key_id)
-  VALUES (@uuid, @source, @filename, @content_type, @size, @description, @irys_url, @arweave_id, @ar_url, @reupload_token, @api_key_id)
+  INSERT INTO uploads (uuid, source, filename, content_type, size, description, irys_url, arweave_id, ar_url, reupload_token, api_key_id, ip_address, user_agent, referer)
+  VALUES (@uuid, @source, @filename, @content_type, @size, @description, @irys_url, @arweave_id, @ar_url, @reupload_token, @api_key_id, @ip_address, @user_agent, @referer)
 `);
 
 function insertUpload(data) {
@@ -93,6 +104,9 @@ function insertUpload(data) {
     ar_url: data.ar_url,
     reupload_token,
     api_key_id: data.api_key_id || null,
+    ip_address: data.ip_address || null,
+    user_agent: data.user_agent || null,
+    referer: data.referer || null,
   };
   _insertUpload.run(row);
   return { ...row, created_at: new Date().toISOString(), reupload_count: 0 };
@@ -126,7 +140,10 @@ function getUploads({ page = 1, limit = 50, source, search } = {}) {
 
   const total = db.prepare(`SELECT COUNT(*) as count FROM uploads WHERE ${where}`).get(params).count;
   const uploads = db.prepare(
-    `SELECT * FROM uploads WHERE ${where} ORDER BY created_at DESC LIMIT @limit OFFSET @offset`
+    `SELECT uploads.*, api_keys.name AS api_key_name
+     FROM uploads
+     LEFT JOIN api_keys ON api_keys.id = uploads.api_key_id
+     WHERE ${where} ORDER BY created_at DESC LIMIT @limit OFFSET @offset`
   ).all({ ...params, limit, offset });
 
   return { uploads, total, page, limit, pages: Math.ceil(total / limit) };

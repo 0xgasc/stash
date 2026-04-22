@@ -17,6 +17,7 @@ const {
 } = require('../db');
 const { uploadFileToIrysFromPath } = require('../utils/irysUploader');
 const { requireApiKey, requireAdminSecret, requireAuth } = require('../middleware/apiAuth');
+const { getClientInfo } = require('../utils/clientInfo');
 
 const router = express.Router();
 
@@ -79,6 +80,7 @@ router.post('/upload', requireApiKey, apiUploadLimiter, upload.single('file'), a
       arweave_id: result.id,
       ar_url: result.arUrl,
       api_key_id: req.apiKey.id,
+      ...getClientInfo(req),
     });
 
     // Cleanup temp file

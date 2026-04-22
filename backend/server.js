@@ -22,6 +22,7 @@ const fs = require('fs');
 const { uploadFileToIrysFromPath } = require('./utils/irysUploader');
 const { insertUpload } = require('./db');
 const apiRoutes = require('./routes/api');
+const { getClientInfo } = require('./utils/clientInfo');
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -229,6 +230,7 @@ app.post('/tus-upload/complete', async (req, res) => {
           irys_url: result.url,
           arweave_id: result.id,
           ar_url: result.arUrl,
+          ...getClientInfo(req),
         });
 
         return res.json({
@@ -295,6 +297,7 @@ app.post('/tus-upload/complete', async (req, res) => {
       irys_url: result.url,
       arweave_id: result.id,
       ar_url: result.arUrl,
+      ...getClientInfo(req),
     });
 
     res.json({

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { Loader2, RefreshCw, Copy, ExternalLink, RotateCcw, Search, ChevronLeft, ChevronRight, FileText } from 'lucide-react'
+import { Loader2, RefreshCw, Copy, ExternalLink, RotateCcw, Search, ChevronLeft, ChevronRight, FileText, ChevronDown, ChevronUp } from 'lucide-react'
 
 interface Upload {
   id: number
@@ -18,6 +18,11 @@ interface Upload {
   reupload_count: number
   last_reuploaded_at: string | null
   created_at: string
+  ip_address: string | null
+  user_agent: string | null
+  referer: string | null
+  api_key_id: number | null
+  api_key_name: string | null
 }
 
 interface UploadsResponse {
@@ -37,6 +42,7 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
   const [sourceFilter, setSourceFilter] = useState('')
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [reuploadingId, setReuploadingId] = useState<string | null>(null)
+  const [expandedId, setExpandedId] = useState<string | null>(null)
 
   const fetchUploads = useCallback(async () => {
     setLoading(true)
@@ -177,61 +183,85 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
       ) : data && data.uploads.length > 0 ? (
         <>
           <div className="bg-gray-950 border border-gray-800 divide-y divide-gray-800/50">
-            {data.uploads.map((u) => (
-              <div key={u.uuid} className="p-4 hover:bg-gray-900/30 transition-colors">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded font-mono">
-                        {u.source}
-                      </span>
-                      <span className="text-white text-sm truncate">{u.filename}</span>
-                      <span className="text-gray-600 text-xs flex-shrink-0">{formatBytes(u.size)}</span>
-                    </div>
-                    {u.description && (
-                      <p className="text-gray-500 text-xs mt-1 truncate">{u.description}</p>
-                    )}
-                    <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
-                      <span>{formatDate(u.created_at)}</span>
-                      <span className="font-mono truncate max-w-[200px]">{u.arweave_id}</span>
-                      {u.reupload_count > 0 && (
-                        <span className="text-yellow-600">re-uploaded {u.reupload_count}x</span>
+            {data.uploads.map((u) => {
+              const isExpanded = expandedId === u.uuid
+              const hasClientInfo = u.ip_address || u.user_agent || u.referer || u.api_key_name
+              return (
+                <div key={u.uuid} className="p-4 hover:bg-gray-900/30 transition-colors">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded font-mono">
+                          {u.source}
+                        </span>
+                        <span className="text-white text-sm truncate">{u.filename}</span>
+                        <span className="text-gray-600 text-xs flex-shrink-0">{formatBytes(u.size)}</span>
+                      </div>
+                      {u.description && (
+                        <p className="text-gray-500 text-xs mt-1 truncate">{u.description}</p>
                       )}
+                      <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
+                        <span>{formatDate(u.created_at)}</span>
+                        <span className="font-mono truncate max-w-[200px]">{u.arweave_id}</span>
+                        {u.ip_address && <span className="font-mono">{u.ip_address}</span>}
+                        {u.api_key_name && <span className="text-blue-500">key: {u.api_key_name}</span>}
+                        {u.reupload_count > 0 && (
+                          <span className="text-yellow-600">re-uploaded {u.reupload_count}x</span>
+                        )}
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {hasClientInfo && (
+                        <button
+                          onClick={() => setExpandedId(isExpanded ? null : u.uuid)}
+                          className="p-2 text-gray-600 hover:text-white"
+                          title={isExpanded ? 'Hide details' : 'Show client info'}
+                        >
+                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => copyUrl(u.irys_url, u.uuid)}
+                        className="p-2 text-gray-600 hover:text-white"
+                        title="Copy URL"
+                      >
+                        <Copy className={`w-3.5 h-3.5 ${copiedId === u.uuid ? 'text-green-400' : ''}`} />
+                      </button>
+                      <a
+                        href={u.irys_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-2 text-gray-600 hover:text-white"
+                        title="Open"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                      <button
+                        onClick={() => reupload(u.uuid)}
+                        disabled={reuploadingId === u.uuid}
+                        className="p-2 text-gray-600 hover:text-white disabled:opacity-50"
+                        title="Re-upload to refresh devnet link"
+                      >
+                        {reuploadingId === u.uuid ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        )}
+                      </button>
                     </div>
                   </div>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button
-                      onClick={() => copyUrl(u.irys_url, u.uuid)}
-                      className="p-2 text-gray-600 hover:text-white"
-                      title="Copy URL"
-                    >
-                      <Copy className={`w-3.5 h-3.5 ${copiedId === u.uuid ? 'text-green-400' : ''}`} />
-                    </button>
-                    <a
-                      href={u.irys_url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="p-2 text-gray-600 hover:text-white"
-                      title="Open"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                    </a>
-                    <button
-                      onClick={() => reupload(u.uuid)}
-                      disabled={reuploadingId === u.uuid}
-                      className="p-2 text-gray-600 hover:text-white disabled:opacity-50"
-                      title="Re-upload to refresh devnet link"
-                    >
-                      {reuploadingId === u.uuid ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      ) : (
-                        <RotateCcw className="w-3.5 h-3.5" />
-                      )}
-                    </button>
-                  </div>
+                  {isExpanded && hasClientInfo && (
+                    <div className="mt-3 pt-3 border-t border-gray-800/50 grid grid-cols-[80px_1fr] gap-x-3 gap-y-1 text-xs">
+                      {u.ip_address && (<><span className="text-gray-600">IP</span><span className="text-gray-300 font-mono break-all">{u.ip_address}</span></>)}
+                      {u.user_agent && (<><span className="text-gray-600">UA</span><span className="text-gray-300 break-all">{u.user_agent}</span></>)}
+                      {u.referer && (<><span className="text-gray-600">Referer</span><span className="text-gray-300 break-all">{u.referer}</span></>)}
+                      {u.api_key_name && (<><span className="text-gray-600">API key</span><span className="text-gray-300">{u.api_key_name}</span></>)}
+                      <span className="text-gray-600">UUID</span><span className="text-gray-500 font-mono break-all">{u.uuid}</span>
+                    </div>
+                  )}
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
 
           {/* Pagination */}
