@@ -81,12 +81,40 @@ if (currentVersion < 2) {
   console.log('✅ Database migrated to v2 (ip/ua/referer)');
 }
 
+if (currentVersion < 3) {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS upload_links (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      upload_uuid TEXT NOT NULL,
+      irys_url TEXT NOT NULL,
+      arweave_id TEXT NOT NULL,
+      ar_url TEXT NOT NULL,
+      reason TEXT NOT NULL DEFAULT 'initial',
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (upload_uuid) REFERENCES uploads(uuid)
+    );
+    CREATE INDEX IF NOT EXISTS idx_upload_links_upload_uuid ON upload_links(upload_uuid);
+    CREATE INDEX IF NOT EXISTS idx_upload_links_created_at ON upload_links(created_at);
+
+    -- Backfill: create an 'initial' link record for every existing upload
+    INSERT INTO upload_links (upload_uuid, irys_url, arweave_id, ar_url, reason, created_at)
+    SELECT uuid, irys_url, arweave_id, ar_url, 'initial', created_at FROM uploads;
+  `);
+  db.pragma('user_version = 3');
+  console.log('✅ Database migrated to v3 (upload_links history)');
+}
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
 const _insertUpload = db.prepare(`
   INSERT INTO uploads (uuid, source, filename, content_type, size, description, irys_url, arweave_id, ar_url, reupload_token, api_key_id, ip_address, user_agent, referer)
   VALUES (@uuid, @source, @filename, @content_type, @size, @description, @irys_url, @arweave_id, @ar_url, @reupload_token, @api_key_id, @ip_address, @user_agent, @referer)
+`);
+
+const _insertUploadLink = db.prepare(`
+  INSERT INTO upload_links (upload_uuid, irys_url, arweave_id, ar_url, reason)
+  VALUES (@upload_uuid, @irys_url, @arweave_id, @ar_url, @reason)
 `);
 
 function insertUpload(data) {
@@ -108,7 +136,17 @@ function insertUpload(data) {
     user_agent: data.user_agent || null,
     referer: data.referer || null,
   };
-  _insertUpload.run(row);
+  const tx = db.transaction(() => {
+    _insertUpload.run(row);
+    _insertUploadLink.run({
+      upload_uuid: uuid,
+      irys_url: data.irys_url,
+      arweave_id: data.arweave_id,
+      ar_url: data.ar_url,
+      reason: 'initial',
+    });
+  });
+  tx();
   return { ...row, created_at: new Date().toISOString(), reupload_count: 0 };
 }
 
@@ -157,14 +195,43 @@ const _updateUploadAfterReupload = db.prepare(`
   WHERE uuid = @uuid
 `);
 
-function updateUploadAfterReupload(uuid, newIrysUrl, newArweaveId) {
-  _updateUploadAfterReupload.run({
-    uuid,
-    irys_url: newIrysUrl,
-    arweave_id: newArweaveId,
-    ar_url: `ar://${newArweaveId}`,
+function updateUploadAfterReupload(uuid, newIrysUrl, newArweaveId, reason = 'reupload') {
+  const ar_url = `ar://${newArweaveId}`;
+  const tx = db.transaction(() => {
+    _updateUploadAfterReupload.run({ uuid, irys_url: newIrysUrl, arweave_id: newArweaveId, ar_url });
+    _insertUploadLink.run({
+      upload_uuid: uuid,
+      irys_url: newIrysUrl,
+      arweave_id: newArweaveId,
+      ar_url,
+      reason,
+    });
   });
+  tx();
   return getUploadById(uuid);
+}
+
+const _getUploadLinks = db.prepare(`
+  SELECT id, irys_url, arweave_id, ar_url, reason, created_at
+  FROM upload_links
+  WHERE upload_uuid = ?
+  ORDER BY created_at DESC, id DESC
+`);
+function getUploadLinks(uuid) {
+  return _getUploadLinks.all(uuid);
+}
+
+const _findStaleUploads = db.prepare(`
+  SELECT u.uuid, u.filename
+  FROM uploads u
+  WHERE (
+    SELECT MAX(created_at) FROM upload_links WHERE upload_uuid = u.uuid
+  ) < datetime('now', @cutoff)
+  ORDER BY u.created_at ASC
+  LIMIT @limit
+`);
+function findStaleUploads({ olderThanDays = 50, limit = 25 } = {}) {
+  return _findStaleUploads.all({ cutoff: `-${olderThanDays} days`, limit });
 }
 
 // =====================================================
@@ -225,6 +292,8 @@ module.exports = {
   getUploadById,
   getUploadByReuploadToken,
   updateUploadAfterReupload,
+  getUploadLinks,
+  findStaleUploads,
   insertApiKey,
   getApiKeys,
   deactivateApiKey,

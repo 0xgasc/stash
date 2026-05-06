@@ -8,14 +8,15 @@ const multer = require('multer');
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
-const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 
 const {
   insertUpload, getUploads, getUploadById, getUploadByReuploadToken,
-  updateUploadAfterReupload, insertApiKey, getApiKeys, deactivateApiKey, getStats,
+  updateUploadAfterReupload, getUploadLinks,
+  insertApiKey, getApiKeys, deactivateApiKey, getStats,
 } = require('../db');
 const { uploadFileToIrysFromPath } = require('../utils/irysUploader');
+const { reuploadFromExisting } = require('../utils/reupload');
 const { requireApiKey, requireAdminSecret, requireAuth } = require('../middleware/apiAuth');
 const { getClientInfo } = require('../utils/clientInfo');
 
@@ -138,6 +139,17 @@ router.get('/uploads/:uuid', requireAuth, (req, res) => {
 });
 
 // =====================================================
+// GET /uploads/:uuid/links — Full link history (admin)
+// =====================================================
+router.get('/uploads/:uuid/links', requireAuth, (req, res) => {
+  const upload = getUploadById(req.params.uuid);
+  if (!upload) {
+    return res.status(404).json({ error: 'Upload not found' });
+  }
+  res.json({ links: getUploadLinks(req.params.uuid) });
+});
+
+// =====================================================
 // POST /uploads/:uuid/reupload — Re-upload (authenticated)
 // =====================================================
 router.post('/uploads/:uuid/reupload', requireAuth, async (req, res) => {
@@ -148,7 +160,7 @@ router.post('/uploads/:uuid/reupload', requireAuth, async (req, res) => {
 
   try {
     const result = await reuploadFromExisting(record);
-    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id);
+    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id, 'reupload-admin');
     res.json({ success: true, upload: updated });
   } catch (error) {
     console.error('❌ Re-upload error:', error.message);
@@ -177,7 +189,7 @@ router.post('/reupload/:token', reuploadLimiter, upload.single('file'), async (r
       result = await reuploadFromExisting(record);
     }
 
-    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id);
+    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id, req.file ? 'reupload-token-file' : 'reupload-token');
     res.json({ success: true, upload: updated });
   } catch (error) {
     if (req.file) {
@@ -229,42 +241,5 @@ router.delete('/api-keys/:id', requireAdminSecret, (req, res) => {
   deactivateApiKey(id);
   res.json({ success: true });
 });
-
-// =====================================================
-// HELPER — Fetch existing file and re-upload
-// =====================================================
-async function reuploadFromExisting(record) {
-  const urls = [record.irys_url, `https://arweave.net/${record.arweave_id}`];
-
-  let buffer = null;
-  for (const url of urls) {
-    try {
-      console.log(`🔄 Attempting to fetch from: ${url}`);
-      const response = await fetch(url);
-      if (response.ok) {
-        buffer = Buffer.from(await response.arrayBuffer());
-        console.log(`✅ Fetched ${buffer.length} bytes from ${url}`);
-        break;
-      }
-    } catch (err) {
-      console.log(`⚠️ Failed to fetch from ${url}: ${err.message}`);
-    }
-  }
-
-  if (!buffer) {
-    throw new Error('Could not fetch original file from any gateway. Please provide the file in the request body.');
-  }
-
-  // Write to temp file and upload
-  const tmpPath = path.join(os.tmpdir(), `stash-reupload-${crypto.randomUUID()}`);
-  fs.writeFileSync(tmpPath, buffer);
-
-  try {
-    const result = await uploadFileToIrysFromPath(tmpPath, record.filename);
-    return result;
-  } finally {
-    try { fs.unlinkSync(tmpPath); } catch {}
-  }
-}
 
 module.exports = router;

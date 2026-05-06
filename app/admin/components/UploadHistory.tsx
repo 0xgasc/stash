@@ -33,6 +33,15 @@ interface UploadsResponse {
   pages: number
 }
 
+interface LinkRevision {
+  id: number
+  irys_url: string
+  arweave_id: string
+  ar_url: string
+  reason: string
+  created_at: string
+}
+
 export default function UploadHistory({ authenticated }: { authenticated: boolean }) {
   const [data, setData] = useState<UploadsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -43,6 +52,8 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [reuploadingId, setReuploadingId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
+  const [linkHistory, setLinkHistory] = useState<Record<string, LinkRevision[]>>({})
+  const [linkHistoryLoading, setLinkHistoryLoading] = useState<string | null>(null)
 
   const fetchUploads = useCallback(async () => {
     setLoading(true)
@@ -91,8 +102,11 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
     setReuploadingId(uuid)
     try {
       const res = await fetch(`/api/admin/uploads/${uuid}`, { method: 'POST' })
-      if (res.ok) fetchUploads()
-      else {
+      if (res.ok) {
+        fetchUploads()
+        // refresh history if it was loaded
+        if (linkHistory[uuid]) fetchLinkHistory(uuid)
+      } else {
         const d = await res.json()
         setError(d.error || 'Re-upload failed')
       }
@@ -100,6 +114,30 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
       setError('Re-upload failed')
     } finally {
       setReuploadingId(null)
+    }
+  }
+
+  const fetchLinkHistory = async (uuid: string) => {
+    setLinkHistoryLoading(uuid)
+    try {
+      const res = await fetch(`/api/admin/uploads/${uuid}/links`)
+      if (res.ok) {
+        const d = await res.json()
+        setLinkHistory(prev => ({ ...prev, [uuid]: d.links || [] }))
+      }
+    } catch {
+      // ignore — error inline if user retries
+    } finally {
+      setLinkHistoryLoading(null)
+    }
+  }
+
+  const toggleExpand = (uuid: string) => {
+    if (expandedId === uuid) {
+      setExpandedId(null)
+    } else {
+      setExpandedId(uuid)
+      if (!linkHistory[uuid]) fetchLinkHistory(uuid)
     }
   }
 
@@ -211,15 +249,13 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      {hasClientInfo && (
-                        <button
-                          onClick={() => setExpandedId(isExpanded ? null : u.uuid)}
-                          className="p-2 text-gray-600 hover:text-white"
-                          title={isExpanded ? 'Hide details' : 'Show client info'}
-                        >
-                          {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                        </button>
-                      )}
+                      <button
+                        onClick={() => toggleExpand(u.uuid)}
+                        className="p-2 text-gray-600 hover:text-white"
+                        title={isExpanded ? 'Hide details' : 'Show details & link history'}
+                      >
+                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      </button>
                       <button
                         onClick={() => copyUrl(u.irys_url, u.uuid)}
                         className="p-2 text-gray-600 hover:text-white"
@@ -250,13 +286,52 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
                       </button>
                     </div>
                   </div>
-                  {isExpanded && hasClientInfo && (
-                    <div className="mt-3 pt-3 border-t border-gray-800/50 grid grid-cols-[80px_1fr] gap-x-3 gap-y-1 text-xs">
-                      {u.ip_address && (<><span className="text-gray-600">IP</span><span className="text-gray-300 font-mono break-all">{u.ip_address}</span></>)}
-                      {u.user_agent && (<><span className="text-gray-600">UA</span><span className="text-gray-300 break-all">{u.user_agent}</span></>)}
-                      {u.referer && (<><span className="text-gray-600">Referer</span><span className="text-gray-300 break-all">{u.referer}</span></>)}
-                      {u.api_key_name && (<><span className="text-gray-600">API key</span><span className="text-gray-300">{u.api_key_name}</span></>)}
-                      <span className="text-gray-600">UUID</span><span className="text-gray-500 font-mono break-all">{u.uuid}</span>
+                  {isExpanded && (
+                    <div className="mt-3 pt-3 border-t border-gray-800/50 space-y-3 text-xs">
+                      {hasClientInfo && (
+                        <div className="grid grid-cols-[80px_1fr] gap-x-3 gap-y-1">
+                          {u.ip_address && (<><span className="text-gray-600">IP</span><span className="text-gray-300 font-mono break-all">{u.ip_address}</span></>)}
+                          {u.user_agent && (<><span className="text-gray-600">UA</span><span className="text-gray-300 break-all">{u.user_agent}</span></>)}
+                          {u.referer && (<><span className="text-gray-600">Referer</span><span className="text-gray-300 break-all">{u.referer}</span></>)}
+                          {u.api_key_name && (<><span className="text-gray-600">API key</span><span className="text-gray-300">{u.api_key_name}</span></>)}
+                          <span className="text-gray-600">UUID</span><span className="text-gray-500 font-mono break-all">{u.uuid}</span>
+                        </div>
+                      )}
+                      <div>
+                        <div className="text-gray-600 mb-2">Link history</div>
+                        {linkHistoryLoading === u.uuid && !linkHistory[u.uuid] ? (
+                          <Loader2 className="w-3 h-3 text-gray-500 animate-spin" />
+                        ) : linkHistory[u.uuid] && linkHistory[u.uuid].length > 0 ? (
+                          <div className="space-y-1.5">
+                            {linkHistory[u.uuid].map((rev) => (
+                              <div key={rev.id} className="flex items-center gap-2">
+                                <span className="text-[10px] bg-gray-800 text-gray-400 px-1.5 py-0.5 rounded font-mono uppercase whitespace-nowrap">
+                                  {rev.reason}
+                                </span>
+                                <span className="text-gray-600 whitespace-nowrap">{formatDate(rev.created_at)}</span>
+                                <a
+                                  href={rev.irys_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-gray-400 hover:text-white truncate flex-1 font-mono"
+                                  title={rev.irys_url}
+                                >
+                                  {rev.arweave_id}
+                                </a>
+                                <button
+                                  onClick={() => copyUrl(rev.irys_url, `${u.uuid}-${rev.id}`)}
+                                  className="text-gray-600 hover:text-white"
+                                  title="Copy this revision URL"
+                                >
+                                  <Copy className={`w-3 h-3 ${copiedId === `${u.uuid}-${rev.id}` ? 'text-green-400' : ''}`} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="text-gray-600">No history records</div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>

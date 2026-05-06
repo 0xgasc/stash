@@ -23,6 +23,7 @@ const { uploadFileToIrysFromPath } = require('./utils/irysUploader');
 const { insertUpload } = require('./db');
 const apiRoutes = require('./routes/api');
 const { getClientInfo } = require('./utils/clientInfo');
+const { startReuploadCron } = require('./cron/reuploadStale');
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -338,4 +339,5 @@ app.get('/health', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Stash upload server running on port ${PORT}`);
   console.log(`   Allowed origins: ${allowedOrigins.join(', ')}`);
+  startReuploadCron();
 });
