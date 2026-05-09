@@ -131,7 +131,7 @@ export default function UploadStats({ authenticated }: { authenticated: boolean 
                   <LineChart data={stats.daily_cost_wei.map((d) => ({ day: d.day, eth: Number(d.wei) / 1e18 }))}>
                     <XAxis dataKey="day" tick={{ fill: '#666', fontSize: 10 }} tickFormatter={(v) => v.slice(5)} />
                     <YAxis tick={{ fill: '#666', fontSize: 10 }} tickFormatter={(v) => v.toExponential(0)} />
-                    <Tooltip contentStyle={{ background: '#000', border: '1px solid #333', fontSize: 12 }} formatter={(v: number) => v.toFixed(8) + ' ETH'} />
+                    <Tooltip contentStyle={{ background: '#000', border: '1px solid #333', fontSize: 12 }} formatter={(v) => [Number(v).toFixed(8) + ' ETH', 'cost']} />
                     <Line type="monotone" dataKey="eth" stroke="#fff" dot={false} />
                   </LineChart>
                 </ResponsiveContainer>
