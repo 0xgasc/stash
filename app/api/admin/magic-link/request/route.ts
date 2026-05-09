@@ -7,7 +7,7 @@ import { Resend } from 'resend'
 import { createMagicToken, isAllowedEmail } from '@/app/lib/magic-link'
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY
-const ALERT_FROM = process.env.ALERT_FROM || 'alerts@traza.dev'
+const ALERT_FROM = process.env.ALERT_FROM || 'alerts@offsetworks.xyz'
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://aeter-eight.vercel.app'
 
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null

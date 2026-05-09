@@ -7,7 +7,7 @@
 const { Resend } = require('resend');
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY;
-const ALERT_FROM = process.env.ALERT_FROM || 'alerts@traza.dev';
+const ALERT_FROM = process.env.ALERT_FROM || 'alerts@offsetworks.xyz';
 const ALERT_TO = process.env.ALERT_TO || 'gasolomonc@gmail.com';
 const COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h
 
