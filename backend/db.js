@@ -104,6 +104,35 @@ if (currentVersion < 3) {
   console.log('✅ Database migrated to v3 (upload_links history)');
 }
 
+if (currentVersion < 4) {
+  db.exec(`
+    -- Per-revision cost in wei
+    ALTER TABLE upload_links ADD COLUMN price_wei TEXT;
+
+    -- Geo enrichment on uploads
+    ALTER TABLE uploads ADD COLUMN country TEXT;
+    ALTER TABLE uploads ADD COLUMN region TEXT;
+    ALTER TABLE uploads ADD COLUMN city TEXT;
+    ALTER TABLE uploads ADD COLUMN geo_looked_up_at TEXT;
+
+    CREATE TABLE IF NOT EXISTS cron_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      job TEXT NOT NULL,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ended_at TEXT,
+      status TEXT NOT NULL DEFAULT 'running',
+      processed_count INTEGER DEFAULT 0,
+      success_count INTEGER DEFAULT 0,
+      failed_count INTEGER DEFAULT 0,
+      error_summary TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_cron_runs_started_at ON cron_runs(started_at);
+    CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job);
+  `);
+  db.pragma('user_version = 4');
+  console.log('✅ Database migrated to v4 (cost, geo, cron_runs)');
+}
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -113,8 +142,8 @@ const _insertUpload = db.prepare(`
 `);
 
 const _insertUploadLink = db.prepare(`
-  INSERT INTO upload_links (upload_uuid, irys_url, arweave_id, ar_url, reason)
-  VALUES (@upload_uuid, @irys_url, @arweave_id, @ar_url, @reason)
+  INSERT INTO upload_links (upload_uuid, irys_url, arweave_id, ar_url, reason, price_wei)
+  VALUES (@upload_uuid, @irys_url, @arweave_id, @ar_url, @reason, @price_wei)
 `);
 
 function insertUpload(data) {
@@ -144,6 +173,7 @@ function insertUpload(data) {
       arweave_id: data.arweave_id,
       ar_url: data.ar_url,
       reason: 'initial',
+      price_wei: data.price_wei || null,
     });
   });
   tx();
@@ -195,7 +225,7 @@ const _updateUploadAfterReupload = db.prepare(`
   WHERE uuid = @uuid
 `);
 
-function updateUploadAfterReupload(uuid, newIrysUrl, newArweaveId, reason = 'reupload') {
+function updateUploadAfterReupload(uuid, newIrysUrl, newArweaveId, reason = 'reupload', priceWei = null) {
   const ar_url = `ar://${newArweaveId}`;
   const tx = db.transaction(() => {
     _updateUploadAfterReupload.run({ uuid, irys_url: newIrysUrl, arweave_id: newArweaveId, ar_url });
@@ -205,6 +235,7 @@ function updateUploadAfterReupload(uuid, newIrysUrl, newArweaveId, reason = 'reu
       arweave_id: newArweaveId,
       ar_url,
       reason,
+      price_wei: priceWei,
     });
   });
   tx();
@@ -212,13 +243,79 @@ function updateUploadAfterReupload(uuid, newIrysUrl, newArweaveId, reason = 'reu
 }
 
 const _getUploadLinks = db.prepare(`
-  SELECT id, irys_url, arweave_id, ar_url, reason, created_at
+  SELECT id, irys_url, arweave_id, ar_url, reason, price_wei, created_at
   FROM upload_links
   WHERE upload_uuid = ?
   ORDER BY created_at DESC, id DESC
 `);
 function getUploadLinks(uuid) {
   return _getUploadLinks.all(uuid);
+}
+
+const _getExpiringUploads = db.prepare(`
+  SELECT u.uuid, u.filename, u.size, u.content_type, u.source, u.country, u.city,
+         u.created_at, u.reupload_count,
+         (SELECT MAX(created_at) FROM upload_links WHERE upload_uuid = u.uuid) AS latest_link_at,
+         (SELECT irys_url FROM upload_links WHERE upload_uuid = u.uuid ORDER BY created_at DESC, id DESC LIMIT 1) AS irys_url
+  FROM uploads u
+  ORDER BY latest_link_at ASC NULLS FIRST
+  LIMIT @limit
+`);
+function getExpiringUploads({ limit = 20 } = {}) {
+  return _getExpiringUploads.all({ limit });
+}
+
+const _updateGeo = db.prepare(`
+  UPDATE uploads SET country = @country, region = @region, city = @city, geo_looked_up_at = datetime('now')
+  WHERE uuid = @uuid
+`);
+function updateGeo(uuid, geo) {
+  _updateGeo.run({ uuid, country: geo.country || null, region: geo.region || null, city: geo.city || null });
+}
+
+const _findUuidsForIp = db.prepare(`
+  SELECT uuid FROM uploads WHERE ip_address = ? AND geo_looked_up_at IS NULL
+`);
+function findUuidsNeedingGeo(ip) {
+  return _findUuidsForIp.all(ip).map(r => r.uuid);
+}
+
+const _findCachedGeoForIp = db.prepare(`
+  SELECT country, region, city FROM uploads
+  WHERE ip_address = ? AND geo_looked_up_at IS NOT NULL
+  ORDER BY geo_looked_up_at DESC LIMIT 1
+`);
+function findCachedGeoForIp(ip) {
+  return _findCachedGeoForIp.get(ip) || null;
+}
+
+// =====================================================
+// CRON RUNS
+// =====================================================
+const _startCronRun = db.prepare(`
+  INSERT INTO cron_runs (job) VALUES (?)
+`);
+function startCronRun(job) {
+  const result = _startCronRun.run(job);
+  return result.lastInsertRowid;
+}
+
+const _finishCronRun = db.prepare(`
+  UPDATE cron_runs
+  SET ended_at = datetime('now'), status = @status,
+      processed_count = @processed, success_count = @success,
+      failed_count = @failed, error_summary = @error
+  WHERE id = @id
+`);
+function finishCronRun(id, { status, processed = 0, success = 0, failed = 0, error = null }) {
+  _finishCronRun.run({ id, status, processed, success, failed, error });
+}
+
+const _getCronRuns = db.prepare(`
+  SELECT * FROM cron_runs ORDER BY started_at DESC LIMIT @limit
+`);
+function getCronRuns({ limit = 20 } = {}) {
+  return _getCronRuns.all({ limit });
 }
 
 const _findStaleUploads = db.prepare(`
@@ -275,12 +372,60 @@ function updateApiKeyLastUsed(id) {
 function getStats() {
   const totals = db.prepare('SELECT COUNT(*) as total_uploads, COALESCE(SUM(size), 0) as total_size_bytes FROM uploads').get();
   const bySource = db.prepare('SELECT source, COUNT(*) as count, COALESCE(SUM(size), 0) as total_size FROM uploads GROUP BY source ORDER BY count DESC').all();
+  const byContentType = db.prepare(`
+    SELECT
+      CASE
+        WHEN content_type LIKE 'image/%' THEN 'image'
+        WHEN content_type LIKE 'video/%' THEN 'video'
+        WHEN content_type LIKE 'audio/%' THEN 'audio'
+        WHEN content_type LIKE 'text/%' THEN 'text'
+        WHEN content_type LIKE 'application/pdf' THEN 'pdf'
+        ELSE 'other'
+      END AS bucket,
+      COUNT(*) as count,
+      COALESCE(SUM(size), 0) as total_size
+    FROM uploads GROUP BY bucket ORDER BY count DESC
+  `).all();
   const recent = db.prepare('SELECT uuid, source, filename, size, irys_url, created_at FROM uploads ORDER BY created_at DESC LIMIT 5').all();
+  const byCountry = db.prepare(`
+    SELECT country, COUNT(*) as count
+    FROM uploads WHERE country IS NOT NULL
+    GROUP BY country ORDER BY count DESC LIMIT 10
+  `).all();
+  const totalCostWei = db.prepare(`
+    SELECT COALESCE(SUM(CAST(price_wei AS INTEGER)), 0) AS total_wei,
+           COUNT(*) AS revisions_with_cost
+    FROM upload_links WHERE price_wei IS NOT NULL
+  `).get();
+  const dailySeries = db.prepare(`
+    SELECT DATE(created_at) AS day, COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes
+    FROM uploads
+    WHERE created_at >= datetime('now', '-30 days')
+    GROUP BY day ORDER BY day ASC
+  `).all();
+  const dailyCost = db.prepare(`
+    SELECT DATE(created_at) AS day,
+           COALESCE(SUM(CAST(price_wei AS INTEGER)), 0) AS wei
+    FROM upload_links
+    WHERE price_wei IS NOT NULL AND created_at >= datetime('now', '-30 days')
+    GROUP BY day ORDER BY day ASC
+  `).all();
+  const top10 = db.prepare(`
+    SELECT uuid, filename, size, content_type, source, created_at
+    FROM uploads ORDER BY size DESC LIMIT 10
+  `).all();
 
   return {
     total_uploads: totals.total_uploads,
     total_size_bytes: totals.total_size_bytes,
+    total_cost_wei: totalCostWei.total_wei.toString(),
+    revisions_with_cost: totalCostWei.revisions_with_cost,
     uploads_by_source: bySource,
+    uploads_by_type: byContentType,
+    uploads_by_country: byCountry,
+    daily_uploads: dailySeries,
+    daily_cost_wei: dailyCost,
+    largest_uploads: top10,
     recent_uploads: recent,
   };
 }
@@ -294,6 +439,13 @@ module.exports = {
   updateUploadAfterReupload,
   getUploadLinks,
   findStaleUploads,
+  getExpiringUploads,
+  updateGeo,
+  findUuidsNeedingGeo,
+  findCachedGeoForIp,
+  startCronRun,
+  finishCronRun,
+  getCronRuns,
   insertApiKey,
   getApiKeys,
   deactivateApiKey,

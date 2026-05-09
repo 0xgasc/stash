@@ -17,6 +17,9 @@ import { Loader2, RefreshCw, Lock, Wallet, Database, LogOut, Settings, Save, Ale
 import UploadStats from './components/UploadStats'
 import UploadHistory from './components/UploadHistory'
 import ApiKeyManager from './components/ApiKeyManager'
+import ExpiringSoon from './components/ExpiringSoon'
+import CronStatus from './components/CronStatus'
+import HealthBanner from './components/HealthBanner'
 
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
@@ -381,6 +384,7 @@ export default function AdminPage() {
       </header>
 
       <main className="container mx-auto px-4 py-12 max-w-2xl">
+        <HealthBanner authenticated={authenticated} />
         <div className="flex items-center justify-between mb-8">
           <div>
             <h1 className="text-2xl font-medium text-white mb-1">Balances</h1>
@@ -686,7 +690,8 @@ export default function AdminPage() {
           )}
         </div>
 
-        {/* Stats, Upload History, and API Keys */}
+        <ExpiringSoon authenticated={authenticated} />
+        <CronStatus authenticated={authenticated} />
         <UploadStats authenticated={authenticated} />
         <UploadHistory authenticated={authenticated} />
         <ApiKeyManager authenticated={authenticated} />

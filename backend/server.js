@@ -23,7 +23,9 @@ const { uploadFileToIrysFromPath } = require('./utils/irysUploader');
 const { insertUpload } = require('./db');
 const apiRoutes = require('./routes/api');
 const { getClientInfo } = require('./utils/clientInfo');
+const { scheduleGeoLookup } = require('./utils/geo');
 const { startReuploadCron } = require('./cron/reuploadStale');
+const { startAlertCron } = require('./cron/alerts');
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -231,8 +233,10 @@ app.post('/tus-upload/complete', async (req, res) => {
           irys_url: result.url,
           arweave_id: result.id,
           ar_url: result.arUrl,
+          price_wei: result.priceWei,
           ...getClientInfo(req),
         });
+        scheduleGeoLookup(dbRecord.uuid, dbRecord.ip_address);
 
         return res.json({
           success: true,
@@ -340,4 +344,5 @@ app.listen(PORT, () => {
   console.log(`🚀 Stash upload server running on port ${PORT}`);
   console.log(`   Allowed origins: ${allowedOrigins.join(', ')}`);
   startReuploadCron();
+  startAlertCron();
 });

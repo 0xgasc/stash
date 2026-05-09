@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
+import Link from 'next/link'
 import { Loader2, RefreshCw, Copy, ExternalLink, RotateCcw, Search, ChevronLeft, ChevronRight, FileText, ChevronDown, ChevronUp } from 'lucide-react'
 
 interface Upload {
@@ -23,6 +24,9 @@ interface Upload {
   referer: string | null
   api_key_id: number | null
   api_key_name: string | null
+  country: string | null
+  region: string | null
+  city: string | null
 }
 
 interface UploadsResponse {
@@ -232,7 +236,7 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
                         <span className="text-xs bg-gray-800 text-gray-300 px-2 py-0.5 rounded font-mono">
                           {u.source}
                         </span>
-                        <span className="text-white text-sm truncate">{u.filename}</span>
+                        <Link href={`/admin/uploads/${u.uuid}`} className="text-white text-sm truncate hover:underline">{u.filename}</Link>
                         <span className="text-gray-600 text-xs flex-shrink-0">{formatBytes(u.size)}</span>
                       </div>
                       {u.description && (
@@ -241,6 +245,7 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
                       <div className="flex items-center gap-3 mt-2 text-xs text-gray-600">
                         <span>{formatDate(u.created_at)}</span>
                         <span className="font-mono truncate max-w-[200px]">{u.arweave_id}</span>
+                        {u.country && <span>{u.city ? `${u.city}, ` : ''}{u.country}</span>}
                         {u.ip_address && <span className="font-mono">{u.ip_address}</span>}
                         {u.api_key_name && <span className="text-blue-500">key: {u.api_key_name}</span>}
                         {u.reupload_count > 0 && (

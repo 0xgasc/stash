@@ -123,6 +123,7 @@ async function uploadFileToIrysFromPath(filePath, filename) {
     size: buffer.length,
     contentType,
     filename,
+    priceWei: price.toString(),
   };
 }
 

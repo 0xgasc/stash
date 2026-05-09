@@ -12,13 +12,15 @@ const rateLimit = require('express-rate-limit');
 
 const {
   insertUpload, getUploads, getUploadById, getUploadByReuploadToken,
-  updateUploadAfterReupload, getUploadLinks,
+  updateUploadAfterReupload, getUploadLinks, getExpiringUploads,
+  getCronRuns,
   insertApiKey, getApiKeys, deactivateApiKey, getStats,
 } = require('../db');
 const { uploadFileToIrysFromPath } = require('../utils/irysUploader');
 const { reuploadFromExisting } = require('../utils/reupload');
 const { requireApiKey, requireAdminSecret, requireAuth } = require('../middleware/apiAuth');
 const { getClientInfo } = require('../utils/clientInfo');
+const { scheduleGeoLookup } = require('../utils/geo');
 
 const router = express.Router();
 
@@ -80,9 +82,11 @@ router.post('/upload', requireApiKey, apiUploadLimiter, upload.single('file'), a
       irys_url: result.url,
       arweave_id: result.id,
       ar_url: result.arUrl,
+      price_wei: result.priceWei,
       api_key_id: req.apiKey.id,
       ...getClientInfo(req),
     });
+    scheduleGeoLookup(record.uuid, record.ip_address);
 
     // Cleanup temp file
     try { fs.unlinkSync(filePath); } catch {}
@@ -160,7 +164,7 @@ router.post('/uploads/:uuid/reupload', requireAuth, async (req, res) => {
 
   try {
     const result = await reuploadFromExisting(record);
-    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id, 'reupload-admin');
+    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id, 'reupload-admin', result.priceWei);
     res.json({ success: true, upload: updated });
   } catch (error) {
     console.error('❌ Re-upload error:', error.message);
@@ -189,7 +193,7 @@ router.post('/reupload/:token', reuploadLimiter, upload.single('file'), async (r
       result = await reuploadFromExisting(record);
     }
 
-    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id, req.file ? 'reupload-token-file' : 'reupload-token');
+    const updated = updateUploadAfterReupload(record.uuid, result.url, result.id, req.file ? 'reupload-token-file' : 'reupload-token', result.priceWei);
     res.json({ success: true, upload: updated });
   } catch (error) {
     if (req.file) {
@@ -206,6 +210,45 @@ router.post('/reupload/:token', reuploadLimiter, upload.single('file'), async (r
 router.get('/stats', requireAuth, (req, res) => {
   const stats = getStats();
   res.json(stats);
+});
+
+// =====================================================
+// GET /uploads/expiring — Closest to refresh deadline (admin)
+// =====================================================
+router.get('/uploads/expiring', requireAuth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  res.json({ uploads: getExpiringUploads({ limit }) });
+});
+
+// =====================================================
+// GET /cron/runs — Cron run history (admin)
+// =====================================================
+router.get('/cron/runs', requireAuth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  res.json({ runs: getCronRuns({ limit }) });
+});
+
+// =====================================================
+// POST /uploads/bulk-reupload — Re-upload multiple uploads (admin)
+// =====================================================
+router.post('/uploads/bulk-reupload', requireAuth, async (req, res) => {
+  const uuids = Array.isArray(req.body?.uuids) ? req.body.uuids : [];
+  if (uuids.length === 0) return res.status(400).json({ error: 'uuids array required' });
+  if (uuids.length > 50) return res.status(400).json({ error: 'max 50 uuids per request' });
+
+  const results = [];
+  for (const uuid of uuids) {
+    const record = getUploadById(uuid);
+    if (!record) { results.push({ uuid, ok: false, error: 'not found' }); continue; }
+    try {
+      const result = await reuploadFromExisting(record);
+      updateUploadAfterReupload(uuid, result.url, result.id, 'reupload-admin', result.priceWei);
+      results.push({ uuid, ok: true, irys_url: result.url });
+    } catch (err) {
+      results.push({ uuid, ok: false, error: err.message });
+    }
+  }
+  res.json({ results });
 });
 
 // =====================================================

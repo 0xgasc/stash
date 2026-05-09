@@ -2,12 +2,10 @@
  * Re-uploads files whose latest Irys link is older than the configured
  * threshold so devnet eviction (~60 days) doesn't break links.
  *
- * Runs once at boot (after a small delay) and then every 6 hours. The
- * SQLite query picks files whose newest upload_links row is past the
- * cutoff, so manually-refreshed files get pushed out of the queue
- * automatically.
+ * Each invocation is recorded in the cron_runs table for visibility
+ * in the admin dashboard.
  */
-const { findStaleUploads, getUploadById, updateUploadAfterReupload } = require('../db');
+const { findStaleUploads, getUploadById, updateUploadAfterReupload, startCronRun, finishCronRun } = require('../db');
 const { reuploadFromExisting } = require('../utils/reupload');
 
 const RUN_INTERVAL_MS = 6 * 60 * 60 * 1000; // every 6h
@@ -23,25 +21,42 @@ async function runOnce() {
     return;
   }
   running = true;
+  const runId = startCronRun('reupload-stale');
+  let processed = 0, success = 0, failed = 0;
+  const errors = [];
   const startedAt = Date.now();
+
   try {
     const stale = findStaleUploads({ olderThanDays: STALE_AFTER_DAYS, limit: MAX_PER_RUN });
     if (stale.length === 0) {
       console.log(`🕓 Re-upload cron: 0 stale uploads (>${STALE_AFTER_DAYS}d)`);
-      return;
+    } else {
+      console.log(`🕓 Re-upload cron: ${stale.length} stale upload(s) to refresh`);
     }
-    console.log(`🕓 Re-upload cron: ${stale.length} stale upload(s) to refresh`);
     for (const { uuid, filename } of stale) {
+      processed++;
       const record = getUploadById(uuid);
       if (!record) continue;
       try {
         const result = await reuploadFromExisting(record);
-        updateUploadAfterReupload(uuid, result.url, result.id, 'reupload-cron');
+        updateUploadAfterReupload(uuid, result.url, result.id, 'reupload-cron', result.priceWei);
+        success++;
         console.log(`✅ Cron re-uploaded ${filename} (${uuid}) → ${result.url}`);
       } catch (err) {
-        console.error(`❌ Cron re-upload failed for ${filename} (${uuid}):`, err.message);
+        failed++;
+        const msg = `${filename || uuid}: ${err.message}`;
+        errors.push(msg);
+        console.error(`❌ Cron re-upload failed for ${msg}`);
       }
     }
+    finishCronRun(runId, {
+      status: failed === 0 ? 'success' : (success > 0 ? 'partial' : 'failed'),
+      processed, success, failed,
+      error: errors.length ? errors.slice(0, 5).join(' | ') : null,
+    });
+  } catch (err) {
+    finishCronRun(runId, { status: 'crashed', processed, success, failed, error: err.message });
+    throw err;
   } finally {
     running = false;
     console.log(`🕓 Re-upload cron finished in ${Math.round((Date.now() - startedAt) / 1000)}s`);
@@ -62,4 +77,4 @@ function startReuploadCron() {
   }, FIRST_RUN_DELAY_MS);
 }
 
-module.exports = { startReuploadCron, runOnce };
+module.exports = { startReuploadCron, runOnce, RUN_INTERVAL_MS };
