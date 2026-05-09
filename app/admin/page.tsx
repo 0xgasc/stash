@@ -58,9 +58,18 @@ export default function AdminPage() {
     const err = params.get('magic_error')
     if (err) {
       setMagicError(`Magic link ${err === 'expired' ? 'expired — request a new one' : `invalid (${err})`}`)
-      // Clean URL
       window.history.replaceState({}, '', '/admin')
     }
+
+    // Check if we already have a valid admin cookie (from magic-link redirect or prior session)
+    fetch('/api/admin/session').then((res) => {
+      if (res.ok) {
+        setAuthenticated(true)
+        fetchBalances()
+        fetchSettings()
+      }
+    }).catch(() => { /* ignore */ })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const [balances, setBalances] = useState<BalanceData | null>(null)
