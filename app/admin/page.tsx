@@ -10,7 +10,7 @@
  */
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import * as tus from 'tus-js-client'
 import { Loader2, RefreshCw, Lock, Wallet, Database, LogOut, Settings, Save, AlertTriangle, Upload, CheckCircle, Copy, ExternalLink, RotateCcw } from 'lucide-react'
@@ -46,6 +46,22 @@ export default function AdminPage() {
   const [password, setPassword] = useState('')
   const [loginError, setLoginError] = useState('')
   const [loggingIn, setLoggingIn] = useState(false)
+
+  // Magic link state
+  const [magicEmail, setMagicEmail] = useState('')
+  const [magicSending, setMagicSending] = useState(false)
+  const [magicSent, setMagicSent] = useState(false)
+  const [magicError, setMagicError] = useState('')
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const err = params.get('magic_error')
+    if (err) {
+      setMagicError(`Magic link ${err === 'expired' ? 'expired — request a new one' : `invalid (${err})`}`)
+      // Clean URL
+      window.history.replaceState({}, '', '/admin')
+    }
+  }, [])
 
   const [balances, setBalances] = useState<BalanceData | null>(null)
   const [loading, setLoading] = useState(false)
@@ -94,6 +110,29 @@ export default function AdminPage() {
       setLoginError('Connection error')
     } finally {
       setLoggingIn(false)
+    }
+  }
+
+  const requestMagicLink = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setMagicError('')
+    setMagicSending(true)
+    try {
+      const res = await fetch('/api/admin/magic-link/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: magicEmail }),
+      })
+      if (!res.ok) {
+        const d = await res.json()
+        setMagicError(d.error || 'Could not send link')
+      } else {
+        setMagicSent(true)
+      }
+    } catch {
+      setMagicError('Connection error')
+    } finally {
+      setMagicSending(false)
     }
   }
 
@@ -331,26 +370,57 @@ export default function AdminPage() {
             <p className="text-gray-500 text-sm mt-1">Stash administration</p>
           </div>
 
-          <form onSubmit={handleLogin} className="bg-gray-950 border border-gray-800 p-6">
-            <label className="block text-gray-500 text-xs mb-2">Password</label>
+          <form onSubmit={requestMagicLink} className="bg-gray-950 border border-gray-800 p-6 mb-3">
+            <label className="block text-gray-500 text-xs mb-2">Email</label>
             <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              type="email"
+              value={magicEmail}
+              onChange={(e) => setMagicEmail(e.target.value)}
+              placeholder="you@example.com"
               className="w-full bg-black border border-gray-800 text-white px-3 py-2 text-sm focus:outline-none focus:border-gray-600 mb-4"
               autoFocus
+              disabled={magicSent}
             />
-            {loginError && (
-              <p className="text-red-400 text-xs mb-4">{loginError}</p>
+            {magicError && (
+              <p className="text-red-400 text-xs mb-4">{magicError}</p>
             )}
-            <button
-              type="submit"
-              disabled={loggingIn || !password}
-              className="w-full bg-white hover:bg-gray-200 disabled:bg-gray-700 disabled:text-gray-500 text-black py-2 text-sm font-medium"
-            >
-              {loggingIn ? 'Signing in...' : 'Sign in'}
-            </button>
+            {magicSent ? (
+              <div className="text-green-400 text-xs">
+                If that email is allowed, a sign-in link is on its way. Check your inbox.
+              </div>
+            ) : (
+              <button
+                type="submit"
+                disabled={magicSending || !magicEmail}
+                className="w-full bg-white hover:bg-gray-200 disabled:bg-gray-700 disabled:text-gray-500 text-black py-2 text-sm font-medium"
+              >
+                {magicSending ? 'Sending link...' : 'Send magic link'}
+              </button>
+            )}
           </form>
+
+          <details className="bg-gray-950 border border-gray-800 p-6">
+            <summary className="text-gray-500 text-xs cursor-pointer hover:text-gray-300">Or use admin password</summary>
+            <form onSubmit={handleLogin} className="mt-4">
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Admin password"
+                className="w-full bg-black border border-gray-800 text-white px-3 py-2 text-sm focus:outline-none focus:border-gray-600 mb-3"
+              />
+              {loginError && (
+                <p className="text-red-400 text-xs mb-3">{loginError}</p>
+              )}
+              <button
+                type="submit"
+                disabled={loggingIn || !password}
+                className="w-full bg-gray-800 hover:bg-gray-700 disabled:bg-gray-900 disabled:text-gray-600 text-white py-2 text-sm font-medium"
+              >
+                {loggingIn ? 'Signing in...' : 'Sign in with password'}
+              </button>
+            </form>
+          </details>
 
           <div className="text-center mt-6">
             <Link href="/" className="text-gray-600 hover:text-gray-400 text-sm">
