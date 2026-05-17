@@ -132,6 +132,17 @@ const uploadLimiter = rateLimit({
   message: { error: 'Upload limit exceeded, try again later' },
   standardHeaders: true,
   legacyHeaders: false,
+  // Without this, the 429 response is sent before our handler runs, which
+  // means it ships WITHOUT CORS headers — browsers then surface it as a
+  // generic XHR failure (response code n/a) and tus-js-client reports
+  // "[object XMLHttpRequestProgressEvent]" instead of a real rate-limit
+  // error. Set the same CORS headers we set on success.
+  handler: (req, res /*, next, options */) => {
+    setTusCorsHeaders(req, res);
+    res
+      .status(429)
+      .json({ error: 'Upload limit exceeded (20/hour). Try again later.' });
+  },
 });
 
 // =====================================================
