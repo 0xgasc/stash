@@ -20,18 +20,37 @@ const IRYS_LOW_THRESHOLD_ETH = parseFloat(process.env.IRYS_LOW_THRESHOLD || '0.0
 const REUPLOAD_AFTER_DAYS = parseInt(process.env.REUPLOAD_AFTER_DAYS || '15', 10);
 const MISSED_GRACE_DAYS = 3;
 
+// Some Sepolia RPCs (Alchemy free tier, etc.) reject eth_getBalance without
+// proper auth. Fall back to community endpoints so the alert check stays alive.
+const SEPOLIA_RPC_FALLBACKS = [
+  'https://ethereum-sepolia-rpc.publicnode.com',
+  'https://rpc.sepolia.org',
+  'https://sepolia.drpc.org',
+];
+
 async function fetchSepoliaBalance() {
-  const rpc = process.env.SEPOLIA_RPC;
-  if (!rpc || !process.env.PRIVATE_KEY) return null;
+  if (!process.env.PRIVATE_KEY) return null;
   const key = process.env.PRIVATE_KEY.trim();
   const wallet = new Wallet(key.startsWith('0x') ? key : `0x${key}`);
-  const res = await fetch(rpc, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [wallet.address, 'latest'], id: 1 }),
-  });
-  const data = await res.json();
-  return { wei: BigInt(data.result || '0'), address: wallet.address };
+  const rpcs = [process.env.SEPOLIA_RPC, ...SEPOLIA_RPC_FALLBACKS].filter(Boolean);
+
+  for (const rpc of rpcs) {
+    try {
+      const res = await fetch(rpc, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [wallet.address, 'latest'], id: 1 }),
+      });
+      const text = await res.text();
+      let data;
+      try { data = JSON.parse(text); } catch { throw new Error(`non-JSON response: ${text.slice(0, 80)}`); }
+      if (data.error) throw new Error(JSON.stringify(data.error));
+      if (data.result) return { wei: BigInt(data.result), address: wallet.address };
+    } catch (err) {
+      console.error(`Sepolia balance via ${rpc.slice(0, 40)}... failed: ${err.message}`);
+    }
+  }
+  return null;
 }
 
 async function fetchIrysBalance() {

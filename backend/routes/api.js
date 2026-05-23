@@ -21,6 +21,7 @@ const { reuploadFromExisting } = require('../utils/reupload');
 const { requireApiKey, requireAdminSecret, requireAuth } = require('../middleware/apiAuth');
 const { getClientInfo } = require('../utils/clientInfo');
 const { scheduleGeoLookup } = require('../utils/geo');
+const { sendAlert } = require('../utils/alerts');
 
 const router = express.Router();
 
@@ -218,6 +219,21 @@ router.get('/stats', requireAuth, (req, res) => {
 router.get('/uploads/expiring', requireAuth, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
   res.json({ uploads: getExpiringUploads({ limit }) });
+});
+
+// =====================================================
+// POST /alerts/test — Send a test alert (admin)
+// =====================================================
+router.post('/alerts/test', requireAuth, async (req, res) => {
+  // Bypass cooldown by including a timestamp in the key
+  const result = await sendAlert({
+    key: `test-${Date.now()}`,
+    subject: '[stash] Test alert',
+    html: `<p>This is a test alert from your Stash backend at ${new Date().toISOString()}.</p>
+<p>If you're reading this in your inbox, the alert system is wired correctly.</p>
+<p>Configured: from <code>${process.env.ALERT_FROM || 'alerts@offsetworks.xyz'}</code>, to <code>${process.env.ALERT_TO || 'gasolomonc@gmail.com'}</code></p>`,
+  });
+  res.json({ ok: !result.error, ...result });
 });
 
 // =====================================================

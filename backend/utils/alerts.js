@@ -29,11 +29,17 @@ async function sendAlert({ key, subject, html }) {
       subject,
       html,
     });
+    // Resend returns {data, error}; on rejection it does NOT throw.
+    if (result.error) {
+      console.error(`❌ Resend rejected send: ${JSON.stringify(result.error)}`);
+      // Don't set cooldown so we retry next interval
+      return { error: result.error.message || String(result.error) };
+    }
     lastSent.set(key, Date.now());
-    console.log(`📨 Alert sent: ${subject}`);
+    console.log(`📨 Alert sent (id=${result.data?.id}): ${subject}`);
     return { id: result.data?.id };
   } catch (err) {
-    console.error(`❌ Resend send failed: ${err.message}`);
+    console.error(`❌ Resend send threw: ${err.message}`);
     return { error: err.message };
   }
 }

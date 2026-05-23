@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { AlertTriangle, XCircle } from 'lucide-react'
+import { AlertTriangle, XCircle, Mail, CheckCircle, Loader2 } from 'lucide-react'
 
 const SEPOLIA_LOW = 0.1
 const IRYS_LOW = 0.005
@@ -15,6 +15,27 @@ interface CronRun { status: string; started_at: string; error_summary: string | 
 
 export default function HealthBanner({ authenticated }: { authenticated: boolean }) {
   const [issues, setIssues] = useState<{ level: 'warn' | 'error'; msg: string }[]>([])
+  const [testing, setTesting] = useState(false)
+  const [testResult, setTestResult] = useState<{ ok: boolean; msg: string } | null>(null)
+
+  const sendTestAlert = async () => {
+    setTesting(true)
+    setTestResult(null)
+    try {
+      const res = await fetch('/api/admin/alerts/test', { method: 'POST' })
+      const d = await res.json()
+      if (res.ok && d.ok) {
+        setTestResult({ ok: true, msg: `Test sent (id: ${d.id || '—'}). Check your inbox + spam folder.` })
+      } else {
+        setTestResult({ ok: false, msg: d.error || d.skipped || 'Failed' })
+      }
+    } catch {
+      setTestResult({ ok: false, msg: 'Connection error' })
+    } finally {
+      setTesting(false)
+      setTimeout(() => setTestResult(null), 12000)
+    }
+  }
 
   useEffect(() => {
     if (!authenticated) return
@@ -47,8 +68,6 @@ export default function HealthBanner({ authenticated }: { authenticated: boolean
     return () => clearInterval(t)
   }, [authenticated])
 
-  if (issues.length === 0) return null
-
   return (
     <div className="space-y-2 mb-6">
       {issues.map((i, idx) => (
@@ -64,6 +83,28 @@ export default function HealthBanner({ authenticated }: { authenticated: boolean
           <span>{i.msg}</span>
         </div>
       ))}
+      <div className="flex items-center justify-between gap-3 p-3 bg-gray-950 border border-gray-800 text-xs text-gray-500">
+        <div className="flex items-center gap-2">
+          <Mail className="w-3.5 h-3.5" />
+          <span>Email alerts wired (Sepolia &lt; 0.1 ETH · Irys &lt; 0.005 ETH · cron failures)</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {testResult && (
+            <span className={`text-xs ${testResult.ok ? 'text-green-400' : 'text-red-400'} flex items-center gap-1`}>
+              {testResult.ok ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
+              {testResult.msg}
+            </span>
+          )}
+          <button
+            onClick={sendTestAlert}
+            disabled={testing}
+            className="border border-gray-700 hover:border-gray-600 text-gray-300 hover:text-white px-3 py-1 text-xs flex items-center gap-1.5 disabled:opacity-50"
+          >
+            {testing ? <Loader2 className="w-3 h-3 animate-spin" /> : <Mail className="w-3 h-3" />}
+            Send test alert
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
