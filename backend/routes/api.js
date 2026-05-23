@@ -222,6 +222,62 @@ router.get('/uploads/expiring', requireAuth, (req, res) => {
 });
 
 // =====================================================
+// POST /fund-irys — Transfer Sepolia ETH to Irys devnet balance (admin)
+// =====================================================
+router.post('/fund-irys', requireAuth, async (req, res) => {
+  const amountEth = Number(req.body?.amountEth);
+  if (!Number.isFinite(amountEth) || amountEth <= 0 || amountEth > 1) {
+    return res.status(400).json({ error: 'amountEth must be a positive number, max 1 ETH per request' });
+  }
+
+  try {
+    const { Uploader } = await import('@irys/upload');
+    const { Ethereum } = await import('@irys/upload-ethereum');
+
+    const privateKey = process.env.PRIVATE_KEY;
+    const sepoliaRpc = process.env.SEPOLIA_RPC;
+    if (!privateKey || !sepoliaRpc) {
+      return res.status(500).json({ error: 'PRIVATE_KEY or SEPOLIA_RPC not configured' });
+    }
+
+    const key = privateKey.trim().replace(/^0x/i, '');
+    const uploader = await Uploader(Ethereum).withWallet(key).withRpc(sepoliaRpc).devnet();
+
+    const [whole, frac = ''] = amountEth.toString().split('.');
+    const fracPadded = (frac + '0'.repeat(18)).slice(0, 18);
+    const amountWei = (BigInt(whole) * BigInt(1e18) + BigInt(fracPadded)).toString();
+
+    const balanceBefore = (await uploader.getBalance()).toString();
+
+    let receipt;
+    try {
+      receipt = await uploader.fund(amountWei);
+    } catch (fundErr) {
+      // Common case: tx submitted but Irys bundler times out at 30s. Surface tx id anyway.
+      const txMatch = String(fundErr.message || '').match(/0x[a-fA-F0-9]{64}/);
+      return res.json({
+        ok: false,
+        pending: true,
+        txId: txMatch ? txMatch[0] : null,
+        message: 'Fund tx broadcast but bundler did not confirm within 30s. It will likely credit once Sepolia mines (~1-3 min).',
+        details: fundErr.message,
+      });
+    }
+
+    return res.json({
+      ok: true,
+      txId: receipt.id,
+      quantity: receipt.quantity?.toString(),
+      reward: receipt.reward?.toString(),
+      balanceBeforeWei: balanceBefore,
+    });
+  } catch (err) {
+    console.error('fund-irys error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// =====================================================
 // POST /alerts/test — Send a test alert (admin)
 // =====================================================
 router.post('/alerts/test', requireAuth, async (req, res) => {

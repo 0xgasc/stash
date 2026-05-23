@@ -13,7 +13,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import * as tus from 'tus-js-client'
-import { Loader2, RefreshCw, Lock, Wallet, Database, LogOut, Settings, Save, AlertTriangle, Upload, CheckCircle, Copy, ExternalLink, RotateCcw } from 'lucide-react'
+import { Loader2, RefreshCw, Lock, Wallet, Database, LogOut, Settings, Save, AlertTriangle, Upload, CheckCircle, Copy, ExternalLink, RotateCcw, ArrowDown } from 'lucide-react'
 import UploadStats from './components/UploadStats'
 import UploadHistory from './components/UploadHistory'
 import ApiKeyManager from './components/ApiKeyManager'
@@ -84,6 +84,11 @@ export default function AdminPage() {
   const [settingsSaving, setSettingsSaving] = useState(false)
   const [settingsError, setSettingsError] = useState('')
   const [settingsSuccess, setSettingsSuccess] = useState('')
+
+  // Fund Irys state
+  const [fundAmount, setFundAmount] = useState('0.1')
+  const [funding, setFunding] = useState(false)
+  const [fundResult, setFundResult] = useState<{ ok: boolean; pending?: boolean; txId?: string | null; message?: string; error?: string } | null>(null)
 
   // Upload state
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -247,6 +252,32 @@ export default function AdminPage() {
     const num = parseInt(value, 10)
     if (!isNaN(num) && num >= 0) {
       setSettings({ ...settings, [key]: num })
+    }
+  }
+
+  const fundIrys = async () => {
+    const amt = parseFloat(fundAmount)
+    if (!isFinite(amt) || amt <= 0 || amt > 1) {
+      setFundResult({ ok: false, error: 'Amount must be > 0 and ≤ 1 ETH' })
+      return
+    }
+    setFunding(true)
+    setFundResult(null)
+    try {
+      const res = await fetch('/api/admin/fund-irys', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ amountEth: amt }),
+      })
+      const data = await res.json()
+      setFundResult(data)
+      // Refresh balances in 30s and again in 90s to catch the credit
+      setTimeout(() => fetchBalances(), 30_000)
+      setTimeout(() => fetchBalances(), 90_000)
+    } catch {
+      setFundResult({ ok: false, error: 'Connection error' })
+    } finally {
+      setFunding(false)
     }
   }
 
@@ -526,11 +557,48 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Info */}
+            {/* Fund Irys */}
             <div className="bg-gray-950 border border-gray-800 p-5">
-              <p className="text-gray-500 text-sm">
-                The Irys balance is what&apos;s available for uploads on devnet.
-                The Sepolia balance is what&apos;s in the wallet on-chain and can be used to fund Irys further.
+              <div className="flex items-center gap-2 mb-3">
+                <ArrowDown className="w-4 h-4 text-gray-500" />
+                <span className="text-gray-500 text-xs">Top up Irys from Sepolia wallet</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  max="1"
+                  value={fundAmount}
+                  onChange={(e) => setFundAmount(e.target.value)}
+                  disabled={funding}
+                  className="bg-black border border-gray-800 text-white px-3 py-2 text-sm w-32 focus:outline-none focus:border-gray-600"
+                />
+                <span className="text-gray-500 text-sm">ETH</span>
+                <button
+                  onClick={fundIrys}
+                  disabled={funding}
+                  className="flex items-center gap-1.5 bg-white hover:bg-gray-200 disabled:bg-gray-700 disabled:text-gray-500 text-black px-4 py-2 text-sm font-medium ml-auto"
+                >
+                  {funding ? <Loader2 className="w-3 h-3 animate-spin" /> : <ArrowDown className="w-3 h-3" />}
+                  {funding ? 'Funding...' : 'Top up'}
+                </button>
+              </div>
+              {fundResult && (
+                <div className={`mt-3 p-3 text-xs ${
+                  fundResult.ok
+                    ? 'bg-green-950/30 border border-green-900/50 text-green-300'
+                    : fundResult.pending
+                      ? 'bg-yellow-950/30 border border-yellow-900/50 text-yellow-300'
+                      : 'bg-red-950/30 border border-red-900/50 text-red-300'
+                }`}>
+                  {fundResult.ok && <>✅ Funded. Tx <code className="font-mono break-all">{fundResult.txId}</code>. Balance will refresh in ~60s.</>}
+                  {fundResult.pending && <>⏳ {fundResult.message} {fundResult.txId && <>Tx <code className="font-mono break-all">{fundResult.txId}</code></>}</>}
+                  {!fundResult.ok && !fundResult.pending && <>❌ {fundResult.error || 'Failed'}</>}
+                </div>
+              )}
+              <p className="text-gray-600 text-xs mt-3">
+                Irys is what pays for uploads. Refill when Irys drops below 0.005 ETH. Max 1 ETH per request.
               </p>
             </div>
           </div>
