@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useCallback, useEffect } from 'react'
-import { Upload, Loader2, CheckCircle, Copy, ExternalLink } from 'lucide-react'
+import { Upload, Loader2, CheckCircle, Copy, ExternalLink, Folder, Inbox } from 'lucide-react'
 import * as tus from 'tus-js-client'
 import AuthModal from './AuthModal'
 import { useAuth } from './AuthProvider'
@@ -20,6 +20,13 @@ interface UploadLimit {
   limit: number
   limitReached: boolean
   maxFileSizeMB: number
+}
+
+interface UserFolder {
+  id: number
+  slug: string
+  name: string
+  is_inbox: number
 }
 
 function formatBytes(bytes: number): string {
@@ -41,6 +48,8 @@ export default function HomeUploadHero() {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [uploadLimit, setUploadLimit] = useState<UploadLimit | null>(null)
+  const [folders, setFolders] = useState<UserFolder[]>([])
+  const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null)
 
   const fetchLimit = useCallback(() => {
     if (!user) {
@@ -51,9 +60,16 @@ export default function HomeUploadHero() {
     }
   }, [user])
 
-  useEffect(() => {
-    fetchLimit()
-  }, [fetchLimit])
+  const fetchFolders = useCallback(() => {
+    if (!user) { setFolders([]); return }
+    fetch('/api/me/folders')
+      .then(r => r.ok ? r.json() : { folders: [] })
+      .then(d => setFolders(d.folders || []))
+      .catch(() => setFolders([]))
+  }, [user])
+
+  useEffect(() => { fetchLimit() }, [fetchLimit])
+  useEffect(() => { fetchFolders() }, [fetchFolders])
 
   const handleUpload = async (file: File) => {
     setError(null)
@@ -129,14 +145,22 @@ export default function HomeUploadHero() {
             }, 1500)
 
             try {
-              // Tell server to process the completed upload → Irys
-              const response = await fetch(`${UPLOAD_SERVER}/tus-upload/complete`, {
+              // Logged-in users go through the Next-side proxy so the
+              // backend gets a verified user_id + the chosen folder_id.
+              // Anonymous uploads hit the backend directly (no change).
+              const endpoint = user
+                ? '/api/upload/finalize'
+                : `${UPLOAD_SERVER}/tus-upload/complete`
+              const completePayload: Record<string, unknown> = {
+                uploadId,
+                originalFilename: file.name,
+              }
+              if (user && selectedFolderId) completePayload.folder_id = selectedFolderId
+
+              const response = await fetch(endpoint, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  uploadId,
-                  originalFilename: file.name,
-                }),
+                body: JSON.stringify(completePayload),
               })
 
               if (progressInterval) clearInterval(progressInterval)
@@ -371,6 +395,22 @@ export default function HomeUploadHero() {
   // Dropzone state
   return (
     <div className="max-w-2xl mx-auto">
+      {user && folders.length > 0 && (
+        <div className="mb-3 flex items-center gap-2 text-xs text-gray-500">
+          <Folder className="w-3.5 h-3.5" />
+          <span className="uppercase tracking-wider">Upload to</span>
+          <select
+            value={selectedFolderId ?? ''}
+            onChange={(e) => setSelectedFolderId(e.target.value ? Number(e.target.value) : null)}
+            className="flex-1 bg-black border border-gray-800 hover:border-gray-700 text-white px-2 py-1.5 text-xs focus:outline-none focus:border-gray-500"
+          >
+            <option value="">Inbox (default — unfiled)</option>
+            {folders.filter(f => !f.is_inbox).map(f => (
+              <option key={f.id} value={f.id}>{f.name}</option>
+            ))}
+          </select>
+        </div>
+      )}
       <div
         onDrop={handleDrop}
         onDragOver={handleDragOver}

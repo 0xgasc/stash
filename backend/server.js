@@ -26,6 +26,36 @@ const { getClientInfo } = require('./utils/clientInfo');
 const { scheduleGeoLookup } = require('./utils/geo');
 const { startReuploadCron } = require('./cron/reuploadStale');
 const { startAlertCron } = require('./cron/alerts');
+const { addUploadToFolder, getFolderById, getInboxFolder } = require('./db');
+
+const TRUSTED_HEADER = 'x-admin-secret';
+const ADMIN_BACKEND_SECRET = process.env.ADMIN_BACKEND_SECRET;
+
+function trustedUserContext(req) {
+  // Only honor user_id/folder_id from requests bearing the admin secret
+  // (which means: from the Next.js authenticated proxy, not the browser).
+  if (!ADMIN_BACKEND_SECRET || req.headers[TRUSTED_HEADER] !== ADMIN_BACKEND_SECRET) {
+    return { user_id: null, folder_id: null };
+  }
+  const user_id = req.body?.user_id || null;
+  const folder_id = req.body?.folder_id ? Number(req.body.folder_id) : null;
+  return { user_id, folder_id };
+}
+
+function associateAfterInsert(uuid, user_id, folder_id) {
+  if (!user_id) return;
+  // Use the explicit folder if owned by user; otherwise drop into the user's Inbox.
+  let target = null;
+  if (folder_id) {
+    const f = getFolderById(folder_id);
+    if (f && f.user_id === user_id) target = f.id;
+  }
+  if (!target) {
+    const inbox = getInboxFolder(user_id);
+    if (inbox) target = inbox.id;
+  }
+  if (target) addUploadToFolder(uuid, target, 0);
+}
 
 const app = express();
 const PORT = process.env.PORT || 5050;
@@ -124,6 +154,9 @@ app.use('/tus-upload/complete', express.json());
 
 // Mount API v1 routes
 app.use('/api/v1', apiRoutes);
+app.use('/api/v1/users', require('./routes/users'));
+app.use('/api/v1/me', require('./routes/me'));
+app.use('/api/v1/u', require('./routes/public'));
 
 // Rate limiting
 const uploadLimiter = rateLimit({
@@ -235,7 +268,8 @@ app.post('/tus-upload/complete', async (req, res) => {
           console.error('⚠️ Cleanup failed:', cleanupError.message);
         }
 
-        // Record in database
+        // Record in database (with optional user_id from trusted Next.js proxy)
+        const ctx = trustedUserContext(req);
         const dbRecord = insertUpload({
           source: req.body.source || 'web',
           filename: result.filename,
@@ -245,9 +279,11 @@ app.post('/tus-upload/complete', async (req, res) => {
           arweave_id: result.id,
           ar_url: result.arUrl,
           price_wei: result.priceWei,
+          user_id: ctx.user_id,
           ...getClientInfo(req),
         });
         scheduleGeoLookup(dbRecord.uuid, dbRecord.ip_address);
+        associateAfterInsert(dbRecord.uuid, ctx.user_id, ctx.folder_id);
 
         return res.json({
           success: true,
@@ -304,7 +340,8 @@ app.post('/tus-upload/complete', async (req, res) => {
 
     completedTusUploads.delete(uploadId);
 
-    // Record in database
+    // Record in database (with optional user_id from trusted Next.js proxy)
+    const ctx = trustedUserContext(req);
     const dbRecord = insertUpload({
       source: req.body.source || 'web',
       filename: result.filename,
@@ -313,8 +350,12 @@ app.post('/tus-upload/complete', async (req, res) => {
       irys_url: result.url,
       arweave_id: result.id,
       ar_url: result.arUrl,
+      price_wei: result.priceWei,
+      user_id: ctx.user_id,
       ...getClientInfo(req),
     });
+    scheduleGeoLookup(dbRecord.uuid, dbRecord.ip_address);
+    associateAfterInsert(dbRecord.uuid, ctx.user_id, ctx.folder_id);
 
     res.json({
       success: true,
