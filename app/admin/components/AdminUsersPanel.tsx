@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { Loader2, RefreshCw, UserPlus, Copy, Mail, AlertTriangle, CheckCircle, Send } from 'lucide-react'
+import { Loader2, RefreshCw, UserPlus, Copy, Mail, AlertTriangle, CheckCircle, Send, MailPlus, RotateCw } from 'lucide-react'
 
 interface AdminUserRow {
   id: string
@@ -41,6 +41,14 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
   const [assignProvider, setAssignProvider] = useState('manual')
   const [assignPaid, setAssignPaid] = useState(true)
 
+  // Assign-email state (for placeholder accounts)
+  const [assigningEmailUser, setAssigningEmailUser] = useState<string | null>(null)
+  const [assignEmail, setAssignEmail] = useState('')
+  const [assignSendEmail, setAssignSendEmail] = useState(true)
+  const [assignEmailBusy, setAssignEmailBusy] = useState(false)
+  const [emailAssignResult, setEmailAssignResult] = useState<{ user_id: string; claim_url: string; email_status: string } | null>(null)
+  const [emailCopied, setEmailCopied] = useState(false)
+
   const fetchAll = useCallback(async () => {
     setLoading(true)
     setError(null)
@@ -69,7 +77,7 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: email.trim(),
+          email: email.trim() || null,
           display_name: displayName.trim() || null,
           plan_id: planId || null,
           send_email: sendEmail,
@@ -88,6 +96,39 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
     } finally {
       setCreating(false)
     }
+  }
+
+  const submitAssignEmail = async (userId: string, e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setAssignEmailBusy(true)
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/assign-email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: assignEmail.trim(), send_email: assignSendEmail }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.reason) {
+        setError(data.reason === 'email_already_active'
+          ? 'A user with that email already exists'
+          : data.error || data.reason || 'Failed')
+        return
+      }
+      setEmailAssignResult({ user_id: userId, claim_url: data.claim_url, email_status: data.email_status })
+      setAssigningEmailUser(null)
+      setAssignEmail('')
+      fetchAll()
+    } finally {
+      setAssignEmailBusy(false)
+    }
+  }
+
+  const copyClaimUrlForRow = async (url: string, userId: string) => {
+    await navigator.clipboard.writeText(url)
+    setEmailCopied(true)
+    setTimeout(() => setEmailCopied(false), 2000)
+    setEmailAssignResult((prev) => prev && prev.user_id === userId ? prev : null)
   }
 
   const assignPlan = async (userId: string) => {
@@ -181,11 +222,12 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
 
       {showCreate && (
         <form onSubmit={createUser} className="bg-gray-950 border border-gray-800 p-5 mb-4">
-          <h3 className="text-white text-sm mb-3">New user</h3>
+          <h3 className="text-white text-sm mb-1">New user</h3>
+          <p className="text-gray-600 text-xs mb-3">Leave email blank to create a placeholder account — you can assign it to someone later.</p>
           <div className="grid sm:grid-cols-2 gap-3 mb-3">
             <input
-              type="email" required value={email} onChange={(e) => setEmail(e.target.value)}
-              placeholder="user@example.com"
+              type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+              placeholder="user@example.com (optional)"
               className="bg-black border border-gray-800 text-white px-3 py-2 text-sm focus:outline-none focus:border-gray-600"
             />
             <input
@@ -214,11 +256,11 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
           <div className="flex items-center justify-end gap-2">
             <button type="button" onClick={() => setShowCreate(false)} className="text-gray-500 hover:text-white text-sm px-3 py-1.5">Cancel</button>
             <button
-              type="submit" disabled={creating || !email}
+              type="submit" disabled={creating}
               className="flex items-center gap-1.5 bg-white hover:bg-gray-200 disabled:bg-gray-700 disabled:text-gray-500 text-black px-4 py-1.5 text-sm font-medium"
             >
               {creating && <Loader2 className="w-3 h-3 animate-spin" />}
-              Create user
+              {email ? 'Create + email claim link' : 'Create placeholder account'}
             </button>
           </div>
         </form>
@@ -240,9 +282,15 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
                     <span className="text-gray-600">(no handle yet)</span>
                   )}
                   <span className="text-gray-500">·</span>
-                  <span className="text-gray-400 text-xs">{u.email}</span>
+                  {u.email ? (
+                    <span className="text-gray-400 text-xs">{u.email}</span>
+                  ) : (
+                    <span className="text-gray-600 text-xs italic">(unassigned)</span>
+                  )}
                   {u.display_name && <span className="text-gray-600 text-xs">— {u.display_name}</span>}
-                  {!u.claimed_at && u.has_pending_claim ? (
+                  {!u.claimed_at && !u.email ? (
+                    <span className="text-purple-400 text-[10px] bg-purple-900/30 border border-purple-900/50 px-1.5 py-0.5">PLACEHOLDER</span>
+                  ) : !u.claimed_at && u.has_pending_claim ? (
                     <span className="text-yellow-400 text-[10px] bg-yellow-900/30 border border-yellow-900/50 px-1.5 py-0.5">CLAIM PENDING</span>
                   ) : u.claimed_at ? (
                     <span className="text-green-400 text-[10px] bg-green-900/20 border border-green-900/50 px-1.5 py-0.5">CLAIMED</span>
@@ -257,13 +305,81 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
                   <span>· joined {new Date(u.created_at + 'Z').toLocaleDateString()}</span>
                 </div>
               </div>
-              <button
-                onClick={() => { setAssigningUser(assigningUser === u.id ? null : u.id); setAssignPlanId('') }}
-                className="text-gray-500 hover:text-white text-xs px-2 py-1"
-              >
-                {assigningUser === u.id ? 'Cancel' : 'Assign plan'}
-              </button>
+              <div className="flex items-center gap-1">
+                {!u.claimed_at && (
+                  <button
+                    onClick={() => {
+                      setAssigningEmailUser(assigningEmailUser === u.id ? null : u.id)
+                      setAssignEmail(u.email || '')
+                      setAssignSendEmail(true)
+                    }}
+                    className="flex items-center gap-1 text-gray-500 hover:text-white text-xs px-2 py-1"
+                  >
+                    {assigningEmailUser === u.id
+                      ? 'Cancel'
+                      : <><MailPlus className="w-3 h-3" />{u.email ? 'Resend link' : 'Assign user'}</>}
+                  </button>
+                )}
+                <button
+                  onClick={() => { setAssigningUser(assigningUser === u.id ? null : u.id); setAssignPlanId('') }}
+                  className="text-gray-500 hover:text-white text-xs px-2 py-1"
+                >
+                  {assigningUser === u.id ? 'Cancel' : 'Assign plan'}
+                </button>
+              </div>
             </div>
+
+            {assigningEmailUser === u.id && (
+              <form onSubmit={(e) => submitAssignEmail(u.id, e)} className="mt-3 pt-3 border-t border-gray-800/50 space-y-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="email" required value={assignEmail}
+                    onChange={(e) => setAssignEmail(e.target.value)}
+                    placeholder={u.email ? 'replace email or keep same' : 'recipient@example.com'}
+                    autoFocus
+                    className="flex-1 bg-black border border-gray-800 text-white px-2 py-1.5 focus:outline-none focus:border-gray-600"
+                  />
+                  <label className="flex items-center gap-1 text-gray-400 cursor-pointer">
+                    <input type="checkbox" checked={assignSendEmail} onChange={(e) => setAssignSendEmail(e.target.checked)} className="accent-white" />
+                    <Send className="w-3 h-3" />
+                    Email
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={assignEmailBusy || !assignEmail}
+                    className="flex items-center gap-1 bg-white hover:bg-gray-200 disabled:bg-gray-700 disabled:text-gray-500 text-black px-3 py-1.5 font-medium"
+                  >
+                    {assignEmailBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <MailPlus className="w-3 h-3" />}
+                    {u.email ? 'Regenerate' : 'Assign'}
+                  </button>
+                </div>
+                <p className="text-gray-600">
+                  Generates a fresh 7-day claim link. If &quot;Email&quot; is checked, sends it to that address via Resend.
+                </p>
+              </form>
+            )}
+
+            {emailAssignResult && emailAssignResult.user_id === u.id && (
+              <div className="mt-3 pt-3 border-t border-gray-800/50 bg-green-950/20 p-2 text-xs">
+                <div className="flex items-center gap-2 text-green-300 mb-1">
+                  <CheckCircle className="w-3.5 h-3.5" />
+                  Claim link ready · email: <span className={emailAssignResult.email_status === 'sent' ? 'text-green-400' : 'text-yellow-400'}>{emailAssignResult.email_status}</span>
+                </div>
+                <div className="flex items-center gap-2 bg-black border border-gray-800 p-1.5">
+                  <code className="text-gray-400 text-[11px] flex-1 truncate font-mono">{emailAssignResult.claim_url}</code>
+                  <button
+                    onClick={() => copyClaimUrlForRow(emailAssignResult.claim_url, u.id)}
+                    className="text-gray-400 hover:text-white text-[10px] px-2"
+                  >
+                    <Copy className="w-3 h-3 inline" /> {emailCopied ? 'Copied' : 'Copy'}
+                  </button>
+                  <button
+                    onClick={() => setEmailAssignResult(null)}
+                    className="text-gray-600 hover:text-white text-[10px] px-1"
+                  >×</button>
+                </div>
+              </div>
+            )}
             {assigningUser === u.id && (
               <div className="mt-3 pt-3 border-t border-gray-800/50 flex flex-wrap items-center gap-2 text-xs">
                 <select

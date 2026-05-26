@@ -9,6 +9,7 @@ const {
   createPreClaimUser, listAllUsers, getUserById,
   getAllPlans, getPlanById, createPlan, updatePlan,
   assignPlan, getActiveUserPlan, getUserPlanHistory,
+  assignUserEmail, regenerateClaimToken,
 } = require('../db');
 const { requireAdminSecret } = require('../middleware/apiAuth');
 
@@ -55,6 +56,24 @@ router.get('/users/:id', (req, res) => {
     active_plan: getActiveUserPlan(user.id),
     plan_history: getUserPlanHistory(user.id),
   });
+});
+
+router.post('/users/:id/assign-email', (req, res) => {
+  const user = getUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: 'not_found' });
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'email required' });
+  const result = assignUserEmail(user.id, email);
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
+});
+
+router.post('/users/:id/regenerate-claim-token', (req, res) => {
+  const user = getUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: 'not_found' });
+  const result = regenerateClaimToken(user.id);
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
 });
 
 router.post('/users/:id/assign-plan', (req, res) => {

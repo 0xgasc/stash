@@ -963,21 +963,79 @@ const CLAIM_TTL_DAYS = 7;
 
 const _insertPreClaimUser = db.prepare(`
   INSERT INTO users (id, email, display_name, claim_token, claim_token_expires_at, created_by_admin)
-  VALUES (@id, @email, @display_name, @claim_token, datetime('now', '+${CLAIM_TTL_DAYS} days'), 1)
+  VALUES (@id, @email, @display_name, @claim_token, @claim_token_expires_at, 1)
 `);
 
-function createPreClaimUser({ email, display_name = null, granted_by_user_id = null }) {
-  if (!email || !email.includes('@')) return { ok: false, reason: 'invalid_email' };
-  const normEmail = email.trim().toLowerCase();
-  // Reject if a user with that email + supabase_user_id already exists (they're already on the platform)
-  const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND supabase_user_id IS NOT NULL').get(normEmail);
-  if (existing) return { ok: false, reason: 'email_already_active', existingUserId: existing.id };
+/**
+ * Create an admin-owned account. Email is OPTIONAL:
+ *   - With email: a claim_token is generated and the account is "ready to send".
+ *   - Without email: the account is a placeholder. Admin must later call
+ *     assignUserEmail(userId, email) to attach an email + generate a token.
+ */
+function createPreClaimUser({ email = null, display_name = null, granted_by_user_id = null }) {
+  let normEmail = null;
+  let claim_token = null;
+  let claim_token_expires_at = null;
+
+  if (email) {
+    if (!email.includes('@')) return { ok: false, reason: 'invalid_email' };
+    normEmail = email.trim().toLowerCase();
+    const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND supabase_user_id IS NOT NULL').get(normEmail);
+    if (existing) return { ok: false, reason: 'email_already_active', existingUserId: existing.id };
+    claim_token = crypto.randomBytes(24).toString('base64url');
+    claim_token_expires_at = new Date(Date.now() + CLAIM_TTL_DAYS * 24 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  }
 
   const id = crypto.randomUUID();
-  const claim_token = crypto.randomBytes(24).toString('base64url');
-  _insertPreClaimUser.run({ id, email: normEmail, display_name, claim_token });
-  // Granted-by is tracked on user_plans, not users, so it shows in plan history
+  _insertPreClaimUser.run({ id, email: normEmail, display_name, claim_token, claim_token_expires_at });
   return { ok: true, user: getUserById(id), claim_token, granted_by_user_id };
+}
+
+/**
+ * Attach an email to a previously-created unassigned account and
+ * generate a fresh claim token. Refuses if the account is already
+ * claimed (supabase_user_id non-null).
+ */
+const _assignEmailQuery = db.prepare(`
+  UPDATE users SET
+    email = @email,
+    claim_token = @claim_token,
+    claim_token_expires_at = @claim_token_expires_at,
+    updated_at = datetime('now')
+  WHERE id = @id AND claimed_at IS NULL
+`);
+function assignUserEmail(userId, email) {
+  if (!email || !email.includes('@')) return { ok: false, reason: 'invalid_email' };
+  const user = getUserById(userId);
+  if (!user) return { ok: false, reason: 'not_found' };
+  if (user.claimed_at) return { ok: false, reason: 'already_claimed' };
+
+  const normEmail = email.trim().toLowerCase();
+  const conflict = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND id != ? AND supabase_user_id IS NOT NULL').get(normEmail, userId);
+  if (conflict) return { ok: false, reason: 'email_already_active', existingUserId: conflict.id };
+
+  const claim_token = crypto.randomBytes(24).toString('base64url');
+  const claim_token_expires_at = new Date(Date.now() + CLAIM_TTL_DAYS * 24 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  const info = _assignEmailQuery.run({ id: userId, email: normEmail, claim_token, claim_token_expires_at });
+  if (info.changes === 0) return { ok: false, reason: 'race' };
+  return { ok: true, user: getUserById(userId), claim_token };
+}
+
+/**
+ * Regenerate the claim token for a pending account (e.g. expired link).
+ * Requires the email to already be set.
+ */
+function regenerateClaimToken(userId) {
+  const user = getUserById(userId);
+  if (!user) return { ok: false, reason: 'not_found' };
+  if (user.claimed_at) return { ok: false, reason: 'already_claimed' };
+  if (!user.email) return { ok: false, reason: 'no_email' };
+
+  const claim_token = crypto.randomBytes(24).toString('base64url');
+  const claim_token_expires_at = new Date(Date.now() + CLAIM_TTL_DAYS * 24 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
+  db.prepare('UPDATE users SET claim_token = ?, claim_token_expires_at = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(claim_token, claim_token_expires_at, userId);
+  return { ok: true, user: getUserById(userId), claim_token };
 }
 
 const _getUserByClaimToken = db.prepare(`
@@ -1212,6 +1270,7 @@ module.exports = {
   claimHandle, updateUserProfile,
   // pre-claim / admin
   createPreClaimUser, getUserByClaimToken, claimAccount, listAllUsers,
+  assignUserEmail, regenerateClaimToken,
   // folders
   createFolder, getFolderById, getFolderBySlug,
   getFoldersForUser, getPublicFoldersForUser,

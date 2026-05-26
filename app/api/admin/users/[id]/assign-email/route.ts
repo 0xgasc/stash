@@ -8,54 +8,41 @@ const ALERT_FROM = process.env.ALERT_FROM || 'alerts@offsetworks.xyz'
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://aeter-eight.vercel.app'
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null
 
-interface CreateUserResp {
+interface AssignResp {
   user: { id: string; email: string | null; display_name: string | null }
-  claim_token: string | null
-  active_plan?: { plan_name?: string } | null
+  claim_token: string
 }
 
-export async function GET(req: NextRequest) {
-  if (!(await isAdminAuthenticated())) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  const limit = req.nextUrl.searchParams.get('limit') || '100'
-  const offset = req.nextUrl.searchParams.get('offset') || '0'
-  const res = await backendJson(`/api/v1/admin/users?limit=${limit}&offset=${offset}`)
-  return NextResponse.json(res.data || { error: res.error }, { status: res.status })
-}
-
-export async function POST(req: NextRequest) {
-  if (!(await isAdminAuthenticated())) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  if (!(await isAdminAuthenticated())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  const { id } = await params
   const body = await req.json().catch(() => ({}))
-  const sendEmail = body.send_email !== false   // default: yes
+  const sendEmail = body.send_email !== false
 
-  const res = await backendJson<CreateUserResp>('/api/v1/admin/users', {
+  const res = await backendJson<AssignResp>(`/api/v1/admin/users/${id}/assign-email`, {
     method: 'POST',
-    body: JSON.stringify(body),
+    body: JSON.stringify({ email: body.email }),
   })
   if (!res.ok || !res.data) {
     return NextResponse.json(res.data || { error: res.error }, { status: res.status })
   }
 
-  const { user, claim_token, active_plan } = res.data
-  const claim_url = claim_token ? `${APP_URL}/claim?token=${encodeURIComponent(claim_token)}` : null
+  const { user, claim_token } = res.data
+  const claim_url = `${APP_URL}/claim?token=${encodeURIComponent(claim_token)}`
 
-  let emailStatus: 'sent' | 'skipped' | 'failed' | 'no_resend_key' | 'no_email' = 'skipped'
+  let emailStatus: 'sent' | 'skipped' | 'failed' | 'no_resend_key' = 'skipped'
   let emailError: string | null = null
-  // Only attempt send if we have an email AND a token
-  if (!user.email || !claim_url) {
-    emailStatus = 'no_email'
-  } else if (sendEmail && resend) {
+  if (sendEmail && resend && user.email) {
     try {
-      const planLine = active_plan?.plan_name
-        ? `<p style="margin:0 0 16px;color:#555">Your account is set up on the <strong>${active_plan.plan_name}</strong> plan.</p>`
-        : ''
       const sendRes = await resend.emails.send({
         from: ALERT_FROM,
         to: user.email,
         subject: 'Claim your Stash archive',
         html: `<div style="font-family:system-ui,sans-serif;max-width:480px;margin:24px auto;color:#222">
   <h2 style="margin:0 0 12px">Your Stash account is ready</h2>
-  <p style="margin:0 0 16px;color:#555">An admin created an archive account for you on Stash. Click the button below to claim it — this link expires in 7 days.</p>
-  ${planLine}
+  <p style="margin:0 0 16px;color:#555">An admin assigned an archive account to you on Stash. Click the button below to claim it — this link expires in 7 days.</p>
   <p style="margin:0 0 24px"><a href="${claim_url}" style="display:inline-block;background:#000;color:#fff;padding:10px 18px;text-decoration:none;border-radius:4px;font-weight:500">Claim your account</a></p>
   <p style="margin:0;font-size:12px;color:#888">After claiming you'll pick a public handle and start uploading.</p>
   <p style="margin:8px 0 0;font-size:11px;color:#aaa;word-break:break-all">${claim_url}</p>
@@ -76,10 +63,7 @@ export async function POST(req: NextRequest) {
   }
 
   return NextResponse.json({
-    user,
-    claim_token,
-    claim_url,
-    active_plan,
+    user, claim_token, claim_url,
     email_status: emailStatus,
     email_error: emailError,
   })
