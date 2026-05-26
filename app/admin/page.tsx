@@ -89,6 +89,7 @@ export default function AdminPage() {
 
   // Fund Irys state
   const [fundAmount, setFundAmount] = useState('0.1')
+  const [fundChain, setFundChain] = useState('sepolia')
   const [funding, setFunding] = useState(false)
   const [fundResult, setFundResult] = useState<{ ok: boolean; pending?: boolean; txId?: string | null; message?: string; error?: string } | null>(null)
   const [walletCopied, setWalletCopied] = useState(false)
@@ -270,7 +271,7 @@ export default function AdminPage() {
       const res = await fetch('/api/admin/fund-irys', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ amountEth: amt }),
+        body: JSON.stringify({ amountEth: amt, chain: fundChain }),
       })
       const data = await res.json()
       setFundResult(data)
@@ -596,9 +597,21 @@ export default function AdminPage() {
             <div className="bg-gray-950 border border-gray-800 p-5">
               <div className="flex items-center gap-2 mb-3">
                 <ArrowDown className="w-4 h-4 text-gray-500" />
-                <span className="text-gray-500 text-xs">Top up Irys from Sepolia wallet</span>
+                <span className="text-gray-500 text-xs">Top up Irys from wallet</span>
               </div>
-              <div className="flex items-center gap-2">
+
+              {/* Chain selector + amount */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={fundChain}
+                  onChange={(e) => setFundChain(e.target.value)}
+                  disabled={funding}
+                  className="bg-black border border-gray-800 text-white px-3 py-2 text-sm focus:outline-none focus:border-gray-600"
+                >
+                  <option value="sepolia">Sepolia</option>
+                  <option value="base-sepolia">Base Sepolia</option>
+                  <option value="arbitrum-sepolia">Arbitrum Sepolia</option>
+                </select>
                 <input
                   type="number"
                   step="0.01"
@@ -607,7 +620,7 @@ export default function AdminPage() {
                   value={fundAmount}
                   onChange={(e) => setFundAmount(e.target.value)}
                   disabled={funding}
-                  className="bg-black border border-gray-800 text-white px-3 py-2 text-sm w-32 focus:outline-none focus:border-gray-600"
+                  className="bg-black border border-gray-800 text-white px-3 py-2 text-sm w-24 focus:outline-none focus:border-gray-600"
                 />
                 <span className="text-gray-500 text-sm">ETH</span>
                 <button
@@ -619,6 +632,7 @@ export default function AdminPage() {
                   {funding ? 'Funding...' : 'Top up'}
                 </button>
               </div>
+
               {fundResult && (
                 <div className={`mt-3 p-3 text-xs ${
                   fundResult.ok
@@ -633,7 +647,7 @@ export default function AdminPage() {
                 </div>
               )}
               <p className="text-gray-600 text-xs mt-3">
-                Irys is what pays for uploads. Refill when Irys drops below 0.005 ETH. Max 1 ETH per request.
+                Irys is what pays for uploads. Refill when Irys drops below 0.005 ETH. Max 1 ETH per request. Works across Sepolia, Base, and Arbitrum testnets.
               </p>
             </div>
           </div>

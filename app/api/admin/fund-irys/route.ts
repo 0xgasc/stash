@@ -4,6 +4,26 @@ import { isAdminAuthenticated } from '@/app/lib/admin-auth'
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 const ADMIN_SECRET = process.env.ADMIN_BACKEND_SECRET || ''
 
+type ChainKey = 'sepolia' | 'base-sepolia' | 'arbitrum-sepolia'
+
+const CHAINS: Record<ChainKey, { label: string; rpc: string; chainId: number }> = {
+  sepolia: {
+    label: 'Sepolia',
+    rpc: process.env.SEPOLIA_RPC || 'https://ethereum-sepolia-rpc.publicnode.com',
+    chainId: 11155111,
+  },
+  'base-sepolia': {
+    label: 'Base Sepolia',
+    rpc: 'https://sepolia.base.org',
+    chainId: 84532,
+  },
+  'arbitrum-sepolia': {
+    label: 'Arbitrum Sepolia',
+    rpc: 'https://sepolia-rollup.arbitrum.io/rpc',
+    chainId: 421614,
+  },
+}
+
 export async function POST(req: NextRequest) {
   if (!(await isAdminAuthenticated())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -11,6 +31,14 @@ export async function POST(req: NextRequest) {
 
   const body = await req.json()
   const amountEth = Number(body?.amountEth)
+  const chain = (body?.chain || 'sepolia') as ChainKey
+  const chainConfig = CHAINS[chain]
+  if (!chainConfig) {
+    return NextResponse.json(
+      { error: `Unsupported chain: ${chain}. Use: ${Object.keys(CHAINS).join(', ')}` },
+      { status: 400 },
+    )
+  }
 
   if (!Number.isFinite(amountEth) || amountEth <= 0 || amountEth > 1) {
     return NextResponse.json(
@@ -36,7 +64,7 @@ export async function POST(req: NextRequest) {
           'X-Admin-Secret': ADMIN_SECRET,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ amountEth, chain }),
         signal: controller.signal,
       })
       clearTimeout(timeout)
@@ -50,10 +78,9 @@ export async function POST(req: NextRequest) {
 
   // ── Fallback: Irys SDK directly ──────────────────────────────────────
   const privateKey = process.env.PRIVATE_KEY
-  const sepoliaRpc = process.env.SEPOLIA_RPC
-  if (!privateKey || !sepoliaRpc) {
+  if (!privateKey) {
     return NextResponse.json(
-      { error: 'PRIVATE_KEY or SEPOLIA_RPC not configured' },
+      { error: 'PRIVATE_KEY not configured' },
       { status: 500 },
     )
   }
@@ -63,7 +90,10 @@ export async function POST(req: NextRequest) {
     const { Ethereum } = await import('@irys/upload-ethereum')
 
     const key = privateKey.trim().replace(/^0x/i, '')
-    const uploader = await Uploader(Ethereum).withWallet(key).withRpc(sepoliaRpc).devnet()
+    const uploader = await Uploader(Ethereum)
+      .withWallet(key)
+      .withRpc(chainConfig.rpc)
+      .devnet()
 
     const [whole, frac = ''] = amountEth.toString().split('.')
     const fracPadded = (frac + '0'.repeat(18)).slice(0, 18)
@@ -88,6 +118,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      chain: chainConfig.label,
       txId: receipt.id,
       quantity: receipt.quantity?.toString(),
       reward: receipt.reward?.toString(),
