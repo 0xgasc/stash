@@ -91,6 +91,7 @@ export default function AdminPage() {
   const [fundAmount, setFundAmount] = useState('0.1')
   const [funding, setFunding] = useState(false)
   const [fundResult, setFundResult] = useState<{ ok: boolean; pending?: boolean; txId?: string | null; message?: string; error?: string } | null>(null)
+  const [walletCopied, setWalletCopied] = useState(false)
 
   // Upload state
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -526,8 +527,40 @@ export default function AdminPage() {
           <div className="space-y-4">
             {/* Wallet address */}
             <div className="bg-gray-950 border border-gray-800 p-5">
-              <div className="text-gray-500 text-xs mb-1">Wallet Address</div>
-              <div className="text-white text-sm font-mono break-all">{balances.address}</div>
+              <div className="text-gray-500 text-xs mb-2 uppercase tracking-wider">Sepolia Wallet</div>
+              <div className="flex items-center gap-3">
+                <div className="text-white text-sm font-mono break-all flex-1">{balances.address}</div>
+                <button
+                  onClick={() => { navigator.clipboard.writeText(balances.address); setWalletCopied(true); setTimeout(() => setWalletCopied(false), 2000) }}
+                  className="flex items-center gap-1 border border-gray-700 hover:border-gray-500 text-gray-400 hover:text-white px-3 py-1.5 text-xs shrink-0 transition-colors"
+                >
+                  <Copy className="w-3 h-3" />
+                  {walletCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <div className="mt-3 pt-3 border-t border-gray-800">
+                <p className="text-gray-500 text-xs mb-2">
+                  Send Sepolia ETH to this address to top up your wallet.
+                  Same address works on all EVM chains.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  <a href="https://www.alchemy.com/faucets/ethereum-sepolia" target="_blank" rel="noopener noreferrer"
+                    className="text-xs text-gray-400 hover:text-accent-gold border border-gray-800 hover:border-accent-gold px-2 py-1 transition-colors flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3 h-3" /> Alchemy Faucet
+                  </a>
+                  <a href="https://cloud.google.com/application/web3/faucet/ethereum/sepolia" target="_blank" rel="noopener noreferrer"
+                    className="text-xs text-gray-400 hover:text-accent-gold border border-gray-800 hover:border-accent-gold px-2 py-1 transition-colors flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3 h-3" /> Google Faucet
+                  </a>
+                  <a href="https://sepolia-faucet.pk910.de/" target="_blank" rel="noopener noreferrer"
+                    className="text-xs text-gray-400 hover:text-accent-gold border border-gray-800 hover:border-accent-gold px-2 py-1 transition-colors flex items-center gap-1"
+                  >
+                    <ExternalLink className="w-3 h-3" /> PoW Faucet
+                  </a>
+                </div>
+              </div>
             </div>
 
             {/* Balance cards */}
