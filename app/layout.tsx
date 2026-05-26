@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Space_Mono, Cormorant_Garamond } from "next/font/google";
+import { Space_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "./components/AuthProvider";
 
@@ -9,16 +9,9 @@ const spaceMono = Space_Mono({
   variable: "--font-mono",
 });
 
-const cormorant = Cormorant_Garamond({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-  variable: "--font-serif",
-  style: ["normal", "italic"],
-});
-
 export const metadata: Metadata = {
-  title: "Stash — Eternal Space for Your Files",
-  description: "Permanent storage on Arweave. Upload once, access eternally. Swift as Hermes, immutable as stone.",
+  title: "Stash - Eternal Space for Your Files",
+  description: "Permanent storage on Arweave. Upload once, access eternally. True digital permanence.",
 };
 
 export default function RootLayout({
@@ -28,7 +21,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${spaceMono.variable} ${cormorant.variable} font-mono antialiased`}>
+      <body className={`${spaceMono.variable} font-mono antialiased`}>
         <AuthProvider>
           {children}
         </AuthProvider>

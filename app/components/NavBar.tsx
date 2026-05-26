@@ -1,3 +1,11 @@
+/**
+ * NavBar — Auth-aware navigation header.
+ *
+ * Shows "Log in" (opens AuthModal) when not authenticated and
+ * Supabase is configured, "Dashboard" link when logged in,
+ * or nothing if auth is not configured. Always shows the Stash
+ * logo and Pricing link.
+ */
 'use client'
 
 import { useState } from 'react'
@@ -10,38 +18,23 @@ export default function NavBar() {
   const [showAuthModal, setShowAuthModal] = useState(false)
 
   return (
-    <header className="container mx-auto px-4 py-6 relative z-20">
+    <header className="container mx-auto px-4 py-6 relative z-10">
       <nav className="flex justify-between items-center">
-        {/* Logo — Hermes caduceus-inspired */}
-        <Link href="/" className="group flex items-center gap-3">
-          <span className="text-2xl select-none animate-gold-pulse" aria-hidden="true">
-            ⚚
-          </span>
-          <span className="text-xl font-serif italic font-medium text-accent-gold text-gold tracking-wide">
-            Stash
-          </span>
+        <Link href="/" className="text-xl font-bold text-accent-cyan text-glow tracking-widest uppercase">
+          Stash
         </Link>
-
-        {/* Nav links */}
-        <div className="flex items-center gap-8 text-sm tracking-wider uppercase">
-          <Link
-            href="/pricing"
-            className="text-foreground/40 hover:text-accent-gold transition-colors duration-300"
-          >
+        <div className="flex items-center gap-6 text-sm">
+          <Link href="/pricing" className="text-gray-500 hover:text-accent-cyan transition-colors">
             Pricing
           </Link>
-
           {user ? (
-            <Link
-              href="/dashboard"
-              className="text-foreground/40 hover:text-accent-gold transition-colors duration-300"
-            >
+            <Link href="/dashboard" className="text-gray-500 hover:text-accent-cyan transition-colors">
               Dashboard
             </Link>
           ) : isConfigured ? (
             <button
               onClick={() => setShowAuthModal(true)}
-              className="text-foreground/40 hover:text-accent-gold transition-colors duration-300"
+              className="text-gray-500 hover:text-accent-cyan transition-colors"
             >
               Log in
             </button>
