@@ -20,6 +20,8 @@ import ApiKeyManager from './components/ApiKeyManager'
 import ExpiringSoon from './components/ExpiringSoon'
 import CronStatus from './components/CronStatus'
 import HealthBanner from './components/HealthBanner'
+import AdminUsersPanel from './components/AdminUsersPanel'
+import AdminPlansPanel from './components/AdminPlansPanel'
 
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
@@ -837,6 +839,8 @@ export default function AdminPage() {
           )}
         </div>
 
+        <AdminUsersPanel authenticated={authenticated} />
+        <AdminPlansPanel authenticated={authenticated} />
         <ExpiringSoon authenticated={authenticated} />
         <CronStatus authenticated={authenticated} />
         <UploadStats authenticated={authenticated} />

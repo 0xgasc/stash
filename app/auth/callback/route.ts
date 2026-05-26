@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
   const url = new URL(request.url)
   const code = url.searchParams.get('code')
   const claimToken = url.searchParams.get('claim_token')
+  const adminClaimToken = url.searchParams.get('account_claim_token')
   const redirectTo = safeRedirect(url.searchParams.get('redirect_to'))
 
   const supabase = await createServerSupabaseClient()
@@ -31,6 +32,28 @@ export async function GET(request: NextRequest) {
   const { data, error } = await supabase.auth.exchangeCodeForSession(code)
   if (error || !data.user) {
     return NextResponse.redirect(new URL('/auth?error=exchange', url.origin))
+  }
+
+  // If this signup carries an admin-issued claim token, link the
+  // pre-created SQLite user instead of bootstrapping a new one.
+  if (adminClaimToken) {
+    const claim = await backendJson<{ ok: boolean; reason?: string; user?: { id: string; handle: string | null } }>(
+      '/api/v1/users/claim',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          claim_token: adminClaimToken,
+          supabase_user_id: data.user.id,
+        }),
+      }
+    )
+    if (claim.ok && claim.data?.ok) {
+      const handle = claim.data.user?.handle
+      return NextResponse.redirect(new URL(handle ? '/me' : '/me/setup', url.origin))
+    }
+    // If the claim fails (expired/invalid), fall through to normal bootstrap
+    // so the user still ends up with an account.
+    console.error('Claim failed during auth callback:', claim.error || claim.data?.reason)
   }
 
   // Bootstrap SQLite users row (idempotent upsert via backend)

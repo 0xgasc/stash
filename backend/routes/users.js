@@ -8,7 +8,9 @@
  */
 const express = require('express');
 const {
-  upsertUser, getUserById, getUserByHandle, claimHandle, updateUserProfile,
+  upsertUser, getUserById, getUserByAuthId, getUserByHandle, claimHandle, updateUserProfile,
+  claimAccount, getUserByClaimToken, getActiveUserPlan, getUserMonthlyUsage,
+  getAllPlans,
 } = require('../db');
 const { requireAdminSecret } = require('../middleware/apiAuth');
 
@@ -32,9 +34,46 @@ router.post('/bootstrap', requireAdminSecret, (req, res) => {
 router.get('/me', requireAdminSecret, (req, res) => {
   const id = req.query.user_id;
   if (!id) return res.status(400).json({ error: 'user_id required' });
-  const user = getUserById(id);
+  const user = getUserByAuthId(id) || getUserById(id);
   if (!user) return res.status(404).json({ error: 'not_found' });
-  res.json({ user });
+  const active_plan = getActiveUserPlan(user.id);
+  const usage = getUserMonthlyUsage(user.id);
+  res.json({ user, active_plan, usage });
+});
+
+// Public list of active plans (for pricing pages / upgrade UI)
+router.get('/plans', (req, res) => {
+  res.json({ plans: getAllPlans({ activeOnly: true }) });
+});
+
+// =====================================================
+// POST /users/claim — link Supabase id to pre-created account
+// Body: { claim_token, supabase_user_id }
+// =====================================================
+router.post('/claim', requireAdminSecret, (req, res) => {
+  const { claim_token, supabase_user_id } = req.body || {};
+  if (!claim_token || !supabase_user_id) {
+    return res.status(400).json({ error: 'claim_token and supabase_user_id required' });
+  }
+  const result = claimAccount(claim_token, supabase_user_id);
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
+});
+
+// =====================================================
+// GET /users/claim-preview/:token — show admin-set context to the
+// claimant before they sign in (no auth required, but doesn't leak
+// anything beyond email + display_name + pre-assigned handle)
+// =====================================================
+router.get('/claim-preview/:token', (req, res) => {
+  const pre = getUserByClaimToken(req.params.token);
+  if (!pre) return res.status(404).json({ error: 'invalid_or_expired' });
+  res.json({
+    email: pre.email,
+    display_name: pre.display_name,
+    handle: pre.handle,
+    active_plan: getActiveUserPlan(pre.id),
+  });
 });
 
 // =====================================================

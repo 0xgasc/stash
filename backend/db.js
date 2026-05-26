@@ -238,6 +238,78 @@ if (currentVersion < 5) {
   console.log('✅ Database migrated to v5 (users, folders, tags, junctions)');
 }
 
+if (currentVersion < 6) {
+  db.exec(`
+    -- Pre-claim users + claim-token flow
+    ALTER TABLE users ADD COLUMN supabase_user_id TEXT;
+    ALTER TABLE users ADD COLUMN claim_token TEXT;
+    ALTER TABLE users ADD COLUMN claim_token_expires_at TEXT;
+    ALTER TABLE users ADD COLUMN claimed_at TEXT;
+    ALTER TABLE users ADD COLUMN created_by_admin INTEGER NOT NULL DEFAULT 0;
+
+    CREATE UNIQUE INDEX idx_users_supabase_user_id ON users(supabase_user_id) WHERE supabase_user_id IS NOT NULL;
+    CREATE INDEX idx_users_claim_token ON users(claim_token) WHERE claim_token IS NOT NULL;
+
+    -- Backfill: existing users.id WAS the Supabase auth uuid in v5
+    UPDATE users SET supabase_user_id = id, claimed_at = created_at WHERE supabase_user_id IS NULL;
+
+    -- Add 'claim' to reserved handles (the /claim route was introduced in this migration)
+    INSERT OR IGNORE INTO reserved_handles (handle) VALUES ('claim');
+
+    CREATE TABLE plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      slug TEXT UNIQUE NOT NULL COLLATE NOCASE,
+      name TEXT NOT NULL,
+      tagline TEXT,
+      description TEXT,
+      billing_period TEXT NOT NULL CHECK (billing_period IN ('free','monthly','yearly','one_time')),
+      price_cents INTEGER NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      monthly_upload_limit INTEGER,             -- null = unlimited
+      total_upload_limit INTEGER,               -- null = unlimited (for one_time / lifetime)
+      features_json TEXT NOT NULL DEFAULT '{}',
+      stripe_price_id TEXT,
+      recurrente_url TEXT,
+      stablepay_url TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      is_active INTEGER NOT NULL DEFAULT 1,
+      is_default INTEGER NOT NULL DEFAULT 0,    -- the Free baseline plan
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+
+    CREATE TABLE user_plans (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id TEXT NOT NULL,
+      plan_id INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('pending','active','paused','cancelled','expired')),
+      payment_status TEXT CHECK (payment_status IN ('unpaid','paid','failed','refunded')),
+      payment_provider TEXT CHECK (payment_provider IN ('stripe','recurrente','stablepay','manual','admin_grant')),
+      payment_reference TEXT,
+      started_at TEXT NOT NULL DEFAULT (datetime('now')),
+      ends_at TEXT,
+      notes TEXT,
+      granted_by_user_id TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id),
+      FOREIGN KEY (plan_id) REFERENCES plans(id)
+    );
+    CREATE INDEX idx_user_plans_user_status ON user_plans(user_id, status);
+    CREATE INDEX idx_user_plans_plan ON user_plans(plan_id);
+
+    -- Pre-seed thematic plans (cyberpunk-flavoured, upload-quota based).
+    -- Admin can edit prices/limits/links in the UI later.
+    INSERT INTO plans (slug, name, tagline, description, billing_period, price_cents, currency, monthly_upload_limit, total_upload_limit, features_json, sort_order, is_default) VALUES
+      ('drift',   'Drift',   'Free forever, light touch',          'Get your archive online with 10 uploads per month. Auto-refresh keeps your links alive.',         'free',     0,    'USD', 10,   NULL, '{"custom_accent":false,"custom_domain":false,"private_folders":true,"og_image":false}',                          1, 1),
+      ('signal',  'Signal',  'For regulars',                       '100 uploads per month, custom accent + bio, all-folder previews, faster cron refresh.',          'monthly',  900,  'USD', 100,  NULL, '{"custom_accent":true,"custom_domain":false,"private_folders":true,"og_image":true,"priority_refresh":true}',     2, 0),
+      ('beacon',  'Beacon',  'Power archivist',                    '500 uploads per month, custom domain, OG images for shareability, bulk operations.',            'monthly',  2900, 'USD', 500,  NULL, '{"custom_accent":true,"custom_domain":true,"private_folders":true,"og_image":true,"priority_refresh":true,"bulk":true,"analytics":true}', 3, 0),
+      ('archive', 'Archive', 'One-time, forever',                  'Lifetime plan, unlimited uploads, every feature, no recurring fees.',                            'one_time', 29900,'USD', NULL, NULL, '{"custom_accent":true,"custom_domain":true,"private_folders":true,"og_image":true,"priority_refresh":true,"bulk":true,"analytics":true,"lifetime":true}', 4, 0);
+  `);
+  db.pragma('user_version = 6');
+  console.log('✅ Database migrated to v6 (plans, user_plans, pre-claim users)');
+}
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -542,17 +614,39 @@ function getStats() {
 // =====================================================
 // USERS
 // =====================================================
-const _upsertUser = db.prepare(`
-  INSERT INTO users (id, email, display_name, updated_at)
-  VALUES (@id, @email, @display_name, datetime('now'))
-  ON CONFLICT(id) DO UPDATE SET
-    email = COALESCE(excluded.email, users.email),
-    display_name = COALESCE(excluded.display_name, users.display_name),
+// For organic signups, users.id = supabase_user_id (keeps the v5 invariant
+// where lookups by Supabase UUID still work). For admin-created users,
+// users.id is a fresh internal UUID and supabase_user_id is null until
+// they claim, at which point supabase_user_id is set but id stays put
+// (so FKs on folders/uploads/etc. are stable).
+
+const _getUserByAuthId = db.prepare(`
+  SELECT * FROM users WHERE supabase_user_id = ? OR id = ? LIMIT 1
+`);
+function getUserByAuthId(supabaseUuid) {
+  if (!supabaseUuid) return null;
+  return _getUserByAuthId.get(supabaseUuid, supabaseUuid) || null;
+}
+
+const _insertUserOrganic = db.prepare(`
+  INSERT INTO users (id, supabase_user_id, email, display_name, claimed_at)
+  VALUES (@id, @id, @email, @display_name, datetime('now'))
+`);
+const _updateUserBasic = db.prepare(`
+  UPDATE users SET
+    email = COALESCE(@email, email),
+    display_name = COALESCE(@display_name, display_name),
     updated_at = datetime('now')
+  WHERE id = @id
 `);
 function upsertUser({ id, email = null, display_name = null }) {
-  if (!id) throw new Error('upsertUser: id required');
-  _upsertUser.run({ id, email, display_name });
+  if (!id) throw new Error('upsertUser: id (supabase uuid) required');
+  const existing = getUserByAuthId(id);
+  if (existing) {
+    _updateUserBasic.run({ id: existing.id, email, display_name });
+    return getUserById(existing.id);
+  }
+  _insertUserOrganic.run({ id, email, display_name });
   return getUserById(id);
 }
 
@@ -586,8 +680,11 @@ function claimHandle(userId, handle) {
   if (h.length < 3) return { ok: false, reason: 'too_short' };
   if (isReservedHandle(h)) return { ok: false, reason: 'reserved' };
 
-  const user = getUserById(userId);
+  // Accept either internal id or Supabase auth uuid for resilience
+  const user = getUserById(userId) || getUserByAuthId(userId);
   if (!user) return { ok: false, reason: 'no_user' };
+  // Use the canonical internal id for the UPDATE
+  userId = user.id;
   if (user.handle && user.handle_changed_at) {
     const ageMs = Date.now() - new Date(user.handle_changed_at + 'Z').getTime();
     const cooldownMs = HANDLE_CHANGE_COOLDOWN_DAYS * 24 * 3600 * 1000;
@@ -859,6 +956,235 @@ function createTag(userId, { name, color = null }) {
 const _getTagsForUser = db.prepare('SELECT * FROM tags WHERE user_id = ? ORDER BY name ASC');
 function getTagsForUser(userId) { return _getTagsForUser.all(userId); }
 
+// =====================================================
+// ADMIN: pre-create users with claim tokens
+// =====================================================
+const CLAIM_TTL_DAYS = 7;
+
+const _insertPreClaimUser = db.prepare(`
+  INSERT INTO users (id, email, display_name, claim_token, claim_token_expires_at, created_by_admin)
+  VALUES (@id, @email, @display_name, @claim_token, datetime('now', '+${CLAIM_TTL_DAYS} days'), 1)
+`);
+
+function createPreClaimUser({ email, display_name = null, granted_by_user_id = null }) {
+  if (!email || !email.includes('@')) return { ok: false, reason: 'invalid_email' };
+  const normEmail = email.trim().toLowerCase();
+  // Reject if a user with that email + supabase_user_id already exists (they're already on the platform)
+  const existing = db.prepare('SELECT id FROM users WHERE LOWER(email) = ? AND supabase_user_id IS NOT NULL').get(normEmail);
+  if (existing) return { ok: false, reason: 'email_already_active', existingUserId: existing.id };
+
+  const id = crypto.randomUUID();
+  const claim_token = crypto.randomBytes(24).toString('base64url');
+  _insertPreClaimUser.run({ id, email: normEmail, display_name, claim_token });
+  // Granted-by is tracked on user_plans, not users, so it shows in plan history
+  return { ok: true, user: getUserById(id), claim_token, granted_by_user_id };
+}
+
+const _getUserByClaimToken = db.prepare(`
+  SELECT * FROM users
+  WHERE claim_token = ? AND claim_token_expires_at > datetime('now') AND claimed_at IS NULL
+`);
+function getUserByClaimToken(token) {
+  if (!token) return null;
+  return _getUserByClaimToken.get(token) || null;
+}
+
+const _markClaimed = db.prepare(`
+  UPDATE users SET
+    supabase_user_id = @supabase_user_id,
+    claimed_at = datetime('now'),
+    claim_token = NULL,
+    claim_token_expires_at = NULL,
+    updated_at = datetime('now')
+  WHERE id = @id AND claimed_at IS NULL
+`);
+
+function claimAccount(token, supabaseUuid) {
+  const pre = getUserByClaimToken(token);
+  if (!pre) return { ok: false, reason: 'invalid_or_expired_token' };
+  // If this supabase id is already linked to another user, refuse
+  const conflict = db.prepare('SELECT id FROM users WHERE supabase_user_id = ? AND id != ?').get(supabaseUuid, pre.id);
+  if (conflict) return { ok: false, reason: 'already_linked_to_other_user' };
+  const info = _markClaimed.run({ id: pre.id, supabase_user_id: supabaseUuid });
+  if (info.changes === 0) return { ok: false, reason: 'race' };
+  // Auto-create Inbox if the user already has a handle pre-set by admin (rare)
+  const fc = db.prepare('SELECT COUNT(*) AS c FROM folders WHERE user_id = ?').get(pre.id).c;
+  if (fc === 0 && pre.handle) {
+    _insertFolder.run({
+      user_id: pre.id, slug: 'inbox', name: 'Inbox', description: null,
+      visibility: 'private', default_layout: 'grid',
+      theme: null, accent_color: null, fx_enabled: null, font: null,
+      banner_uuid: null, sort_order: 0, is_inbox: 1,
+    });
+  }
+  return { ok: true, user: getUserById(pre.id) };
+}
+
+function listAllUsers({ limit = 100, offset = 0 } = {}) {
+  return db.prepare(`
+    SELECT u.id, u.handle, u.email, u.display_name, u.supabase_user_id, u.claimed_at,
+           u.claim_token IS NOT NULL AS has_pending_claim,
+           u.claim_token_expires_at, u.created_by_admin, u.created_at,
+           (SELECT p.name FROM user_plans up JOIN plans p ON p.id = up.plan_id
+            WHERE up.user_id = u.id AND up.status = 'active'
+            ORDER BY up.created_at DESC LIMIT 1) AS active_plan_name,
+           (SELECT COUNT(*) FROM uploads WHERE user_id = u.id) AS upload_count
+    FROM users u
+    ORDER BY u.created_at DESC
+    LIMIT ? OFFSET ?
+  `).all(limit, offset);
+}
+
+// =====================================================
+// PLANS
+// =====================================================
+function getAllPlans({ activeOnly = false } = {}) {
+  const where = activeOnly ? 'WHERE is_active = 1' : '';
+  return db.prepare(`SELECT * FROM plans ${where} ORDER BY sort_order ASC, price_cents ASC`).all();
+}
+
+function getPlanById(id) {
+  return db.prepare('SELECT * FROM plans WHERE id = ?').get(id) || null;
+}
+
+function getPlanBySlug(slug) {
+  return db.prepare('SELECT * FROM plans WHERE slug = ? COLLATE NOCASE').get(slug) || null;
+}
+
+function getDefaultPlan() {
+  return db.prepare('SELECT * FROM plans WHERE is_default = 1 AND is_active = 1 LIMIT 1').get() || null;
+}
+
+const _insertPlan = db.prepare(`
+  INSERT INTO plans (slug, name, tagline, description, billing_period, price_cents, currency,
+                     monthly_upload_limit, total_upload_limit, features_json,
+                     stripe_price_id, recurrente_url, stablepay_url, sort_order, is_active, is_default)
+  VALUES (@slug, @name, @tagline, @description, @billing_period, @price_cents, @currency,
+          @monthly_upload_limit, @total_upload_limit, @features_json,
+          @stripe_price_id, @recurrente_url, @stablepay_url, @sort_order, @is_active, @is_default)
+`);
+
+function createPlan(input) {
+  const slug = String(input.slug || '').trim().toLowerCase();
+  if (!/^[a-z0-9][a-z0-9_-]{0,40}$/i.test(slug)) return { ok: false, reason: 'invalid_slug' };
+  if (!['free','monthly','yearly','one_time'].includes(input.billing_period)) return { ok: false, reason: 'invalid_billing_period' };
+  try {
+    const features = typeof input.features_json === 'string' ? input.features_json : JSON.stringify(input.features_json || {});
+    const info = _insertPlan.run({
+      slug,
+      name: String(input.name || slug).slice(0, 60),
+      tagline: input.tagline || null,
+      description: input.description || null,
+      billing_period: input.billing_period,
+      price_cents: parseInt(input.price_cents) || 0,
+      currency: (input.currency || 'USD').toUpperCase().slice(0, 3),
+      monthly_upload_limit: input.monthly_upload_limit == null ? null : parseInt(input.monthly_upload_limit),
+      total_upload_limit: input.total_upload_limit == null ? null : parseInt(input.total_upload_limit),
+      features_json: features,
+      stripe_price_id: input.stripe_price_id || null,
+      recurrente_url: input.recurrente_url || null,
+      stablepay_url: input.stablepay_url || null,
+      sort_order: input.sort_order || 0,
+      is_active: input.is_active === false ? 0 : 1,
+      is_default: input.is_default ? 1 : 0,
+    });
+    return { ok: true, plan: getPlanById(info.lastInsertRowid) };
+  } catch (err) {
+    if (err.message.includes('UNIQUE')) return { ok: false, reason: 'slug_taken' };
+    throw err;
+  }
+}
+
+const _updatePlan = db.prepare(`
+  UPDATE plans SET
+    name = COALESCE(@name, name),
+    tagline = COALESCE(@tagline, tagline),
+    description = COALESCE(@description, description),
+    billing_period = COALESCE(@billing_period, billing_period),
+    price_cents = COALESCE(@price_cents, price_cents),
+    currency = COALESCE(@currency, currency),
+    monthly_upload_limit = COALESCE(@monthly_upload_limit, monthly_upload_limit),
+    total_upload_limit = COALESCE(@total_upload_limit, total_upload_limit),
+    features_json = COALESCE(@features_json, features_json),
+    stripe_price_id = COALESCE(@stripe_price_id, stripe_price_id),
+    recurrente_url = COALESCE(@recurrente_url, recurrente_url),
+    stablepay_url = COALESCE(@stablepay_url, stablepay_url),
+    sort_order = COALESCE(@sort_order, sort_order),
+    is_active = COALESCE(@is_active, is_active),
+    is_default = COALESCE(@is_default, is_default),
+    updated_at = datetime('now')
+  WHERE id = @id
+`);
+function updatePlan(id, patch) {
+  _updatePlan.run({
+    id,
+    name: patch.name ?? null,
+    tagline: patch.tagline ?? null,
+    description: patch.description ?? null,
+    billing_period: patch.billing_period ?? null,
+    price_cents: patch.price_cents == null ? null : parseInt(patch.price_cents),
+    currency: patch.currency ?? null,
+    monthly_upload_limit: patch.monthly_upload_limit ?? null,
+    total_upload_limit: patch.total_upload_limit ?? null,
+    features_json: typeof patch.features_json === 'string' ? patch.features_json : (patch.features_json ? JSON.stringify(patch.features_json) : null),
+    stripe_price_id: patch.stripe_price_id ?? null,
+    recurrente_url: patch.recurrente_url ?? null,
+    stablepay_url: patch.stablepay_url ?? null,
+    sort_order: patch.sort_order ?? null,
+    is_active: patch.is_active == null ? null : (patch.is_active ? 1 : 0),
+    is_default: patch.is_default == null ? null : (patch.is_default ? 1 : 0),
+  });
+  return getPlanById(id);
+}
+
+// =====================================================
+// USER ↔ PLAN
+// =====================================================
+const _insertUserPlan = db.prepare(`
+  INSERT INTO user_plans (user_id, plan_id, status, payment_status, payment_provider, payment_reference, started_at, ends_at, notes, granted_by_user_id)
+  VALUES (@user_id, @plan_id, @status, @payment_status, @payment_provider, @payment_reference, datetime('now'), @ends_at, @notes, @granted_by_user_id)
+`);
+
+function assignPlan(userId, { plan_id, status = 'active', payment_status = null, payment_provider = 'admin_grant', payment_reference = null, ends_at = null, notes = null, granted_by_user_id = null }) {
+  // Demote any existing active plan to expired
+  db.prepare("UPDATE user_plans SET status = 'expired', updated_at = datetime('now') WHERE user_id = ? AND status = 'active'").run(userId);
+  const info = _insertUserPlan.run({
+    user_id: userId, plan_id, status, payment_status, payment_provider, payment_reference,
+    ends_at, notes, granted_by_user_id,
+  });
+  return db.prepare('SELECT * FROM user_plans WHERE id = ?').get(info.lastInsertRowid);
+}
+
+function getActiveUserPlan(userId) {
+  const row = db.prepare(`
+    SELECT up.*, p.slug AS plan_slug, p.name AS plan_name, p.monthly_upload_limit, p.total_upload_limit,
+           p.billing_period, p.price_cents, p.currency, p.features_json
+    FROM user_plans up JOIN plans p ON p.id = up.plan_id
+    WHERE up.user_id = ? AND up.status IN ('active','pending')
+    ORDER BY up.created_at DESC LIMIT 1
+  `).get(userId);
+  return row || null;
+}
+
+function getUserPlanHistory(userId, { limit = 20 } = {}) {
+  return db.prepare(`
+    SELECT up.*, p.name AS plan_name, p.slug AS plan_slug
+    FROM user_plans up JOIN plans p ON p.id = up.plan_id
+    WHERE up.user_id = ?
+    ORDER BY up.created_at DESC LIMIT ?
+  `).all(userId, limit);
+}
+
+function getUserMonthlyUsage(userId) {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS uploads_this_month
+    FROM uploads
+    WHERE user_id = ? AND created_at >= datetime('now', 'start of month')
+  `).get(userId);
+  const total = db.prepare('SELECT COUNT(*) AS total FROM uploads WHERE user_id = ?').get(userId);
+  return { uploads_this_month: row.uploads_this_month, total_uploads: total.total };
+}
+
 module.exports = {
   db,
   insertUpload,
@@ -882,8 +1208,10 @@ module.exports = {
   updateApiKeyLastUsed,
   getStats,
   // users
-  upsertUser, getUserById, getUserByHandle, isReservedHandle,
+  upsertUser, getUserById, getUserByAuthId, getUserByHandle, isReservedHandle,
   claimHandle, updateUserProfile,
+  // pre-claim / admin
+  createPreClaimUser, getUserByClaimToken, claimAccount, listAllUsers,
   // folders
   createFolder, getFolderById, getFolderBySlug,
   getFoldersForUser, getPublicFoldersForUser,
@@ -894,4 +1222,8 @@ module.exports = {
   updateUserUpload,
   // tags
   createTag, getTagsForUser,
+  // plans
+  getAllPlans, getPlanById, getPlanBySlug, getDefaultPlan,
+  createPlan, updatePlan,
+  assignPlan, getActiveUserPlan, getUserPlanHistory, getUserMonthlyUsage,
 };
