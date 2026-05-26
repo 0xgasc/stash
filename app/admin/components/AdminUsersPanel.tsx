@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { Loader2, RefreshCw, UserPlus, Copy, Mail, AlertTriangle, CheckCircle, Send, MailPlus, RotateCw } from 'lucide-react'
+import { Loader2, RefreshCw, UserPlus, Copy, Mail, AlertTriangle, CheckCircle, Send, MailPlus, RotateCw, AtSign } from 'lucide-react'
 
 interface AdminUserRow {
   id: string
@@ -32,9 +32,15 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
 
   const [email, setEmail] = useState('')
   const [displayName, setDisplayName] = useState('')
+  const [handleField, setHandleField] = useState('')
   const [planId, setPlanId] = useState<number | ''>('')
   const [sendEmail, setSendEmail] = useState(true)
   const [creating, setCreating] = useState(false)
+
+  // Per-row handle assignment
+  const [assigningHandleUser, setAssigningHandleUser] = useState<string | null>(null)
+  const [rowHandle, setRowHandle] = useState('')
+  const [rowHandleBusy, setRowHandleBusy] = useState(false)
 
   const [assigningUser, setAssigningUser] = useState<string | null>(null)
   const [assignPlanId, setAssignPlanId] = useState<number | ''>('')
@@ -79,19 +85,25 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
         body: JSON.stringify({
           email: email.trim() || null,
           display_name: displayName.trim() || null,
+          handle: handleField.trim() || null,
           plan_id: planId || null,
           send_email: sendEmail,
         }),
       })
       const data = await res.json()
       if (!res.ok || data.reason) {
-        setError(data.reason === 'email_already_active'
-          ? 'A user with that email already exists'
-          : data.error || data.reason || 'Failed')
+        const reasonMap: Record<string, string> = {
+          email_already_active: 'A user with that email already exists',
+          handle_taken: 'That handle is taken',
+          handle_reserved: 'That handle is reserved',
+          handle_too_short: 'Handle must be at least 3 characters',
+          invalid_handle_format: 'Handle can only contain letters, numbers, dashes, underscores',
+        }
+        setError(reasonMap[data.reason] || data.error || data.reason || 'Failed')
         return
       }
       setCreated({ user: data.user, claim_url: data.claim_url, email_status: data.email_status, active_plan: data.active_plan })
-      setEmail(''); setDisplayName(''); setPlanId(''); setSendEmail(true)
+      setEmail(''); setDisplayName(''); setHandleField(''); setPlanId(''); setSendEmail(true)
       fetchAll()
     } finally {
       setCreating(false)
@@ -121,6 +133,36 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
       fetchAll()
     } finally {
       setAssignEmailBusy(false)
+    }
+  }
+
+  const submitRowHandle = async (userId: string, e: React.FormEvent) => {
+    e.preventDefault()
+    setError(null)
+    setRowHandleBusy(true)
+    try {
+      const res = await fetch(`/api/admin/users/${userId}/set-handle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ handle: rowHandle.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok || data.ok === false) {
+        const reasonMap: Record<string, string> = {
+          taken: 'That handle is taken',
+          reserved: 'That handle is reserved',
+          too_short: 'Handle must be at least 3 characters',
+          invalid_format: 'Handle can only contain letters, numbers, dashes, underscores',
+          already_claimed: 'User has claimed the account — they manage their handle now',
+        }
+        setError(reasonMap[data.reason] || data.error || data.reason || 'Failed')
+        return
+      }
+      setAssigningHandleUser(null)
+      setRowHandle('')
+      fetchAll()
+    } finally {
+      setRowHandleBusy(false)
     }
   }
 
@@ -235,6 +277,16 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
               placeholder="Display name (optional)"
               className="bg-black border border-gray-800 text-white px-3 py-2 text-sm focus:outline-none focus:border-gray-600"
             />
+            <div className="flex items-stretch border border-gray-800 focus-within:border-gray-600">
+              <span className="bg-black text-gray-600 text-xs px-2 py-2 font-mono border-r border-gray-800 flex items-center">/u/</span>
+              <input
+                type="text" value={handleField}
+                onChange={(e) => setHandleField(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                placeholder="handle (optional, reserve now)"
+                maxLength={30}
+                className="flex-1 bg-black text-white px-3 py-2 text-sm font-mono focus:outline-none"
+              />
+            </div>
             <select
               value={planId} onChange={(e) => setPlanId(e.target.value ? Number(e.target.value) : '')}
               className="bg-black border border-gray-800 text-white px-3 py-2 text-sm focus:outline-none focus:border-gray-600"
@@ -309,6 +361,20 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
                 {!u.claimed_at && (
                   <button
                     onClick={() => {
+                      setAssigningHandleUser(assigningHandleUser === u.id ? null : u.id)
+                      setRowHandle(u.handle || '')
+                    }}
+                    className="flex items-center gap-1 text-gray-500 hover:text-white text-xs px-2 py-1"
+                    title={u.handle ? 'Change handle (pre-claim only)' : 'Reserve a handle'}
+                  >
+                    {assigningHandleUser === u.id
+                      ? 'Cancel'
+                      : <><AtSign className="w-3 h-3" />{u.handle ? 'Change handle' : 'Set handle'}</>}
+                  </button>
+                )}
+                {!u.claimed_at && (
+                  <button
+                    onClick={() => {
                       setAssigningEmailUser(assigningEmailUser === u.id ? null : u.id)
                       setAssignEmail(u.email || '')
                       setAssignSendEmail(true)
@@ -328,6 +394,36 @@ export default function AdminUsersPanel({ authenticated }: { authenticated: bool
                 </button>
               </div>
             </div>
+
+            {assigningHandleUser === u.id && (
+              <form onSubmit={(e) => submitRowHandle(u.id, e)} className="mt-3 pt-3 border-t border-gray-800/50 space-y-2 text-xs">
+                <div className="flex items-center gap-2">
+                  <div className="flex items-stretch border border-gray-800 focus-within:border-gray-600 flex-1">
+                    <span className="bg-black text-gray-600 text-xs px-2 py-1.5 font-mono border-r border-gray-800 flex items-center">/u/</span>
+                    <input
+                      type="text" required value={rowHandle}
+                      onChange={(e) => setRowHandle(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+                      placeholder="handle"
+                      minLength={3}
+                      maxLength={30}
+                      autoFocus
+                      className="flex-1 bg-black text-white px-2 py-1.5 font-mono focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={rowHandleBusy || rowHandle.length < 3}
+                    className="flex items-center gap-1 bg-white hover:bg-gray-200 disabled:bg-gray-700 disabled:text-gray-500 text-black px-3 py-1.5 font-medium"
+                  >
+                    {rowHandleBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <AtSign className="w-3 h-3" />}
+                    {u.handle ? 'Change' : 'Reserve'}
+                  </button>
+                </div>
+                <p className="text-gray-600">
+                  Admin-set handles skip the 30-day user cooldown. Auto-creates an Inbox folder. After they claim, they can change it themselves.
+                </p>
+              </form>
+            )}
 
             {assigningEmailUser === u.id && (
               <form onSubmit={(e) => submitAssignEmail(u.id, e)} className="mt-3 pt-3 border-t border-gray-800/50 space-y-2 text-xs">

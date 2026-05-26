@@ -972,7 +972,7 @@ const _insertPreClaimUser = db.prepare(`
  *   - Without email: the account is a placeholder. Admin must later call
  *     assignUserEmail(userId, email) to attach an email + generate a token.
  */
-function createPreClaimUser({ email = null, display_name = null, granted_by_user_id = null }) {
+function createPreClaimUser({ email = null, display_name = null, handle = null, granted_by_user_id = null } = {}) {
   let normEmail = null;
   let claim_token = null;
   let claim_token_expires_at = null;
@@ -986,8 +986,20 @@ function createPreClaimUser({ email = null, display_name = null, granted_by_user
     claim_token_expires_at = new Date(Date.now() + CLAIM_TTL_DAYS * 24 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19);
   }
 
+  // Pre-validate handle if provided (so we don't insert a half-good user and bail)
+  if (handle) {
+    const h = String(handle).trim();
+    if (!HANDLE_RE.test(h)) return { ok: false, reason: 'invalid_handle_format' };
+    if (h.length < 3) return { ok: false, reason: 'handle_too_short' };
+    if (isReservedHandle(h)) return { ok: false, reason: 'handle_reserved' };
+    if (getUserByHandle(h)) return { ok: false, reason: 'handle_taken' };
+  }
+
   const id = crypto.randomUUID();
   _insertPreClaimUser.run({ id, email: normEmail, display_name, claim_token, claim_token_expires_at });
+  if (handle) {
+    setAdminHandle(id, handle); // creates Inbox too
+  }
   return { ok: true, user: getUserById(id), claim_token, granted_by_user_id };
 }
 
@@ -1019,6 +1031,41 @@ function assignUserEmail(userId, email) {
   const info = _assignEmailQuery.run({ id: userId, email: normEmail, claim_token, claim_token_expires_at });
   if (info.changes === 0) return { ok: false, reason: 'race' };
   return { ok: true, user: getUserById(userId), claim_token };
+}
+
+/**
+ * Admin-pre-set the handle on an unclaimed account. Skips the 30-day
+ * cooldown that applies to user-driven handle changes. Auto-creates
+ * Inbox if missing.
+ */
+function setAdminHandle(userId, handle) {
+  const h = String(handle || '').trim();
+  if (!HANDLE_RE.test(h)) return { ok: false, reason: 'invalid_format' };
+  if (h.length < 3) return { ok: false, reason: 'too_short' };
+  if (isReservedHandle(h)) return { ok: false, reason: 'reserved' };
+
+  const user = getUserById(userId);
+  if (!user) return { ok: false, reason: 'not_found' };
+  if (user.claimed_at) return { ok: false, reason: 'already_claimed' };
+
+  const existing = getUserByHandle(h);
+  if (existing && existing.id !== userId) return { ok: false, reason: 'taken' };
+
+  const tx = db.transaction(() => {
+    _claimHandle.run({ id: userId, handle: h });
+    const fc = db.prepare('SELECT COUNT(*) AS c FROM folders WHERE user_id = ?').get(userId).c;
+    if (fc === 0) {
+      _insertFolder.run({
+        user_id: userId,
+        slug: 'inbox', name: 'Inbox', description: null,
+        visibility: 'private', default_layout: 'grid',
+        theme: null, accent_color: null, fx_enabled: null, font: null,
+        banner_uuid: null, sort_order: 0, is_inbox: 1,
+      });
+    }
+  });
+  tx();
+  return { ok: true, user: getUserById(userId) };
 }
 
 /**
@@ -1270,7 +1317,7 @@ module.exports = {
   claimHandle, updateUserProfile,
   // pre-claim / admin
   createPreClaimUser, getUserByClaimToken, claimAccount, listAllUsers,
-  assignUserEmail, regenerateClaimToken,
+  assignUserEmail, regenerateClaimToken, setAdminHandle,
   // folders
   createFolder, getFolderById, getFolderBySlug,
   getFoldersForUser, getPublicFoldersForUser,

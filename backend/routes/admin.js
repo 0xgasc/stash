@@ -9,7 +9,7 @@ const {
   createPreClaimUser, listAllUsers, getUserById,
   getAllPlans, getPlanById, createPlan, updatePlan,
   assignPlan, getActiveUserPlan, getUserPlanHistory,
-  assignUserEmail, regenerateClaimToken,
+  assignUserEmail, regenerateClaimToken, setAdminHandle,
 } = require('../db');
 const { requireAdminSecret } = require('../middleware/apiAuth');
 
@@ -64,6 +64,16 @@ router.post('/users/:id/assign-email', (req, res) => {
   const { email } = req.body || {};
   if (!email) return res.status(400).json({ error: 'email required' });
   const result = assignUserEmail(user.id, email);
+  if (!result.ok) return res.status(400).json(result);
+  res.json(result);
+});
+
+router.post('/users/:id/set-handle', (req, res) => {
+  const user = getUserById(req.params.id);
+  if (!user) return res.status(404).json({ error: 'not_found' });
+  const { handle } = req.body || {};
+  if (!handle) return res.status(400).json({ error: 'handle required' });
+  const result = setAdminHandle(user.id, handle);
   if (!result.ok) return res.status(400).json(result);
   res.json(result);
 });
