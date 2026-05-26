@@ -3,8 +3,8 @@
 @tailwind utilities;
 
 :root {
-  --background: #050505;
-  --foreground: #ededed;
+  --background: #0D0C0A;
+  --foreground: #EDEBE0;
 }
 
 body {
@@ -12,57 +12,100 @@ body {
   background: var(--background);
 }
 
-/* Scanline overlay — subtle CRT effect */
-.scanlines {
+/* ── Marble texture overlay ──────────────────────────────────────────── */
+.marble {
   position: relative;
 }
-.scanlines::after {
+.marble::before {
   content: '';
   position: absolute;
   inset: 0;
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 2px,
-    rgba(125, 211, 192, 0.01) 2px,
-    rgba(125, 211, 192, 0.01) 4px
-  );
+  background:
+    radial-gradient(ellipse at 20% 10%, rgba(212, 168, 83, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 90%, rgba(13, 148, 136, 0.02) 0%, transparent 50%),
+    radial-gradient(ellipse at 50% 50%, rgba(124, 92, 191, 0.015) 0%, transparent 60%);
   pointer-events: none;
-  z-index: 1;
+  z-index: 0;
 }
 
-/* Subtle text glow */
-.text-glow {
-  text-shadow: 0 0 8px rgba(125, 211, 192, 0.3);
+/* ── Meander (Greek key) divider ─────────────────────────────────────── */
+.meander {
+  position: relative;
+  height: 2px;
+  background: repeating-linear-gradient(
+    90deg,
+    rgba(212, 168, 83, 0.25) 0px,
+    rgba(212, 168, 83, 0.25) 24px,
+    transparent 24px,
+    transparent 28px,
+    rgba(212, 168, 83, 0.12) 28px,
+    rgba(212, 168, 83, 0.12) 32px,
+    transparent 32px,
+    transparent 40px
+  );
 }
 
-/* Border glow on hover */
-.border-glow:hover {
-  box-shadow: 0 0 10px rgba(125, 211, 192, 0.1);
+/* ── Gold text glow ──────────────────────────────────────────────────── */
+.text-gold {
+  text-shadow: 0 0 12px rgba(212, 168, 83, 0.3);
 }
 
-/* Flicker animation for subtle cyberpunk feel */
+/* ── Card surfaces ───────────────────────────────────────────────────── */
+.card-surface {
+  background: rgba(20, 19, 18, 0.9);
+  border: 1px solid rgba(38, 35, 30, 0.5);
+  backdrop-filter: blur(12px);
+}
+.card-surface:hover {
+  border-color: rgba(212, 168, 83, 0.15);
+  box-shadow: 0 0 20px rgba(212, 168, 83, 0.06);
+}
+
+/* ── Gold border glow on hover ───────────────────────────────────────── */
+.gold-border {
+  transition: border-color 0.3s ease, box-shadow 0.3s ease;
+}
+.gold-border:hover {
+  border-color: rgba(212, 168, 83, 0.3);
+  box-shadow: 0 0 15px rgba(212, 168, 83, 0.08);
+}
+
+/* ── Subtle pulse for active/loading ─────────────────────────────────── */
+@keyframes gold-pulse {
+  0%, 100% { opacity: 0.6; }
+  50%      { opacity: 1; }
+}
+.animate-gold-pulse {
+  animation: gold-pulse 3s ease-in-out infinite;
+}
+
+/* ── Caduceus serpent line animation (for decorative dividers) ───────── */
+@keyframes serpent-slide {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+
+/* ── Flicker for text elements ───────────────────────────────────────── */
 @keyframes flicker {
   0%, 100% { opacity: 1; }
-  92% { opacity: 1; }
-  93% { opacity: 0.8; }
-  94% { opacity: 1; }
-  96% { opacity: 0.9; }
-  97% { opacity: 1; }
+  92%      { opacity: 1; }
+  93%      { opacity: 0.85; }
+  94%      { opacity: 1; }
+  96%      { opacity: 0.9; }
+  97%      { opacity: 1; }
 }
-
 .animate-flicker {
-  animation: flicker 4s infinite;
+  animation: flicker 5s infinite;
 }
 
-/* Pulse glow for active elements */
-@keyframes pulse-glow {
-  0%, 100% { box-shadow: 0 0 5px rgba(0, 255, 240, 0.2); }
-  50% { box-shadow: 0 0 20px rgba(0, 255, 240, 0.4); }
+/* ── Upload drop zone glow ───────────────────────────────────────────── */
+.upload-zone {
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
 }
-
-.animate-pulse-glow {
-  animation: pulse-glow 2s ease-in-out infinite;
+.upload-zone.dragover {
+  border-color: rgba(212, 168, 83, 0.6) !important;
+  box-shadow: 0 0 40px rgba(212, 168, 83, 0.15), inset 0 0 40px rgba(212, 168, 83, 0.04);
+  background: rgba(20, 19, 18, 0.95);
 }
 
 @layer utilities {
