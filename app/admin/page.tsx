@@ -28,7 +28,7 @@ const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost
 interface BalanceData {
   address: string
   irys: { balanceWei: string; balanceEth: string }
-  sepolia: { balanceWei: string; balanceEth: string }
+  chains: Record<string, { label: string; balanceWei: string; balanceEth: string }>
 }
 
 interface AppSettings {
@@ -564,34 +564,35 @@ export default function AdminPage() {
               </div>
             </div>
 
-            {/* Balance cards */}
-            <div className="grid md:grid-cols-2 gap-4">
-              <div className="bg-gray-950 border border-gray-800 p-5">
-                <div className="flex items-center gap-2 mb-3">
-                  <Database className="w-4 h-4 text-gray-500" />
-                  <span className="text-gray-500 text-xs">Irys Devnet Balance</span>
-                </div>
-                <div className="text-2xl font-medium text-white">
-                  {balances.irys.balanceEth} <span className="text-gray-500 text-sm">ETH</span>
-                </div>
-                <div className="text-gray-600 text-xs mt-1 font-mono">
-                  {balances.irys.balanceWei} wei
-                </div>
+            {/* Irys balance */}
+            <div className="bg-gray-950 border border-gray-800 p-5">
+              <div className="flex items-center gap-2 mb-3">
+                <Database className="w-4 h-4 text-gray-500" />
+                <span className="text-gray-500 text-xs">Irys Devnet Balance</span>
               </div>
-
-              <div className="bg-gray-950 border border-gray-800 p-5">
-                <div className="flex items-center gap-2 mb-3">
-                  <Wallet className="w-4 h-4 text-gray-500" />
-                  <span className="text-gray-500 text-xs">Sepolia Wallet Balance</span>
-                </div>
-                <div className="text-2xl font-medium text-white">
-                  {balances.sepolia.balanceEth} <span className="text-gray-500 text-sm">ETH</span>
-                </div>
-                <div className="text-gray-600 text-xs mt-1 font-mono">
-                  {balances.sepolia.balanceWei} wei
-                </div>
+              <div className="text-2xl font-medium text-white">
+                {balances.irys.balanceEth} <span className="text-gray-500 text-sm">ETH</span>
+              </div>
+              <div className="text-gray-600 text-xs mt-1 font-mono">
+                {balances.irys.balanceWei} wei
               </div>
             </div>
+
+            {/* Chain wallet balances */}
+            {balances.chains && Object.entries(balances.chains).map(([key, chain]) => (
+              <div key={key} className="bg-gray-950 border border-gray-800 p-5">
+                <div className="flex items-center gap-2 mb-3">
+                  <Wallet className="w-4 h-4 text-gray-500" />
+                  <span className="text-gray-500 text-xs">{chain.label} Wallet</span>
+                </div>
+                <div className="text-2xl font-medium text-white">
+                  {chain.balanceEth} <span className="text-gray-500 text-sm">ETH</span>
+                </div>
+                <div className="text-gray-600 text-xs mt-1 font-mono">
+                  {chain.balanceWei} wei
+                </div>
+              </div>
+            ))}
 
             {/* Fund Irys */}
             <div className="bg-gray-950 border border-gray-800 p-5">

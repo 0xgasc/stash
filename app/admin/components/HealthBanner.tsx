@@ -8,7 +8,7 @@ const IRYS_LOW = 0.005
 
 interface BalanceData {
   irys: { balanceEth: string }
-  sepolia: { balanceEth: string }
+  chains: Record<string, { label: string; balanceEth: string }>
 }
 
 interface CronRun { status: string; started_at: string; error_summary: string | null }
@@ -45,10 +45,20 @@ export default function HealthBanner({ authenticated }: { authenticated: boolean
         const balRes = await fetch('/api/admin/irys-balance')
         if (balRes.ok) {
           const b: BalanceData = await balRes.json()
-          const sep = parseFloat(b.sepolia.balanceEth)
           const irys = parseFloat(b.irys.balanceEth)
-          if (sep < SEPOLIA_LOW) found.push({ level: sep < SEPOLIA_LOW / 2 ? 'error' : 'warn', msg: `Sepolia wallet low: ${sep.toFixed(4)} ETH (top up from a faucet)` })
-          if (irys < IRYS_LOW) found.push({ level: 'error', msg: `Irys devnet balance low: ${irys.toFixed(6)} ETH (run fund-irys.js)` })
+          // Check all chain balances for low thresholds
+          if (b.chains) {
+            for (const [key, chain] of Object.entries(b.chains)) {
+              const bal = parseFloat(chain.balanceEth)
+              if (bal < SEPOLIA_LOW) {
+                found.push({
+                  level: bal < SEPOLIA_LOW / 2 ? 'error' : 'warn',
+                  msg: `${chain.label} wallet low: ${bal.toFixed(4)} ETH (top up from a faucet)`,
+                })
+              }
+            }
+          }
+          if (irys < IRYS_LOW) found.push({ level: 'error', msg: `Irys devnet balance low: ${irys.toFixed(6)} ETH (top up via admin panel)` })
         }
       } catch { /* ignore */ }
       try {
