@@ -92,12 +92,53 @@ async function runOnce() {
     if (irysWei !== null) {
       const eth = parseFloat(weiToEth(irysWei));
       if (eth < IRYS_LOW_THRESHOLD_ETH) {
+        // ── Auto-fund Irys from Sepolia ──────────────────
+        const FUND_AMOUNT_ETH = parseFloat(process.env.IRYS_AUTO_FUND_AMOUNT || '0.1');
+        const irysEthStr = weiToEth(irysWei);
+
+        console.log(`⚠️  Irys low: ${irysEthStr} ETH < ${IRYS_LOW_THRESHOLD_ETH} ETH — auto-funding ${FUND_AMOUNT_ETH} ETH...`);
+
+        // Send alert first so we know it tried
         await sendAlert({
           key: 'irys-low',
-          subject: `[stash] Irys devnet balance low: ${eth.toFixed(6)} ETH`,
-          html: `<p>Irys devnet balance is <strong>${eth.toFixed(6)} ETH</strong>, below the ${IRYS_LOW_THRESHOLD_ETH} ETH alert threshold.</p>
-<p>Run <code>node backend/scripts/fund-irys.js &lt;amount&gt;</code> from a funded wallet to top up.</p>`,
+          subject: `[stash] Irys devnet balance low: ${irysEthStr} ETH — auto-fund triggered`,
+          html: `<p>Irys devnet balance was <strong>${irysEthStr} ETH</strong> (below ${IRYS_LOW_THRESHOLD_ETH} ETH).</p>
+<p>Auto-fund of <strong>${FUND_AMOUNT_ETH} ETH</strong> from Sepolia wallet has been triggered.</p>`,
         });
+
+        // Auto-fund
+        try {
+          const { Uploader } = await import('@irys/upload');
+          const { Ethereum } = await import('@irys/upload-ethereum');
+
+          const key = process.env.PRIVATE_KEY.trim().replace(/^0x/i, '');
+          const sepoliaRpc = process.env.SEPOLIA_RPC;
+          const uploader = await Uploader(Ethereum).withWallet(key).withRpc(sepoliaRpc).devnet();
+
+          const [whole, frac = ''] = FUND_AMOUNT_ETH.toString().split('.');
+          const fracPadded = (frac + '0'.repeat(18)).slice(0, 18);
+          const amountWei = (BigInt(whole) * BigInt(1e18) + BigInt(fracPadded)).toString();
+
+          const receipt = await uploader.fund(amountWei);
+          console.log(`✅ Auto-funded Irys. Tx: ${receipt.id}`);
+
+          await sendAlert({
+            key: `irys-autofund-${receipt.id.slice(0, 8)}`,
+            subject: `[stash] ✅ Irys auto-funded: ${FUND_AMOUNT_ETH} ETH`,
+            html: `<p>Successfully auto-funded Irys with <strong>${FUND_AMOUNT_ETH} ETH</strong> from Sepolia wallet.</p>
+<p>Tx ID: <code>${receipt.id}</code></p>
+<p>New Irys balance will reflect once the tx is mined (~1-3 min).</p>`,
+          });
+        } catch (fundErr) {
+          console.error('❌ Auto-fund failed:', fundErr.message);
+          await sendAlert({
+            key: `irys-autofund-fail-${Date.now()}`,
+            subject: `[stash] ❌ Irys auto-fund FAILED`,
+            html: `<p>Irys balance is ${irysEthStr} ETH (below ${IRYS_LOW_THRESHOLD_ETH}) but auto-fund of ${FUND_AMOUNT_ETH} ETH failed:</p>
+<p><code>${fundErr.message}</code></p>
+<p>Manual intervention needed. Run: <code>node backend/scripts/fund-irys.js ${FUND_AMOUNT_ETH}</code></p>`,
+          });
+        }
       }
     }
   } catch (e) {
