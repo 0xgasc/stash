@@ -12,9 +12,11 @@ import Link from 'next/link'
 import { AlertTriangle, Zap, Settings, ExternalLink, Info } from 'lucide-react'
 import { requireUser } from '@/app/lib/auth'
 import { backendJson } from '@/app/lib/backend'
+import { getServerT } from '@/app/lib/i18n/server'
 import FolderListClient from '@/app/components/FolderListClient'
 import SignOutButton from '@/app/components/SignOutButton'
 import MeUploadCard from '@/app/components/MeUploadCard'
+import LangSwitcher from '@/app/components/LangSwitcher'
 
 interface Folder {
   id: number
@@ -43,6 +45,7 @@ interface UserMeResponse {
 
 export default async function MeDashboard() {
   const { stashUser, sessionUser } = await requireUser()
+  const { t } = await getServerT(stashUser.preferred_locale)
   const [foldersRes, meRes] = await Promise.all([
     backendJson<{ folders: Folder[] }>(
       `/api/v1/me/folders?user_id=${encodeURIComponent(stashUser.id)}`,
@@ -75,11 +78,12 @@ export default async function MeDashboard() {
           <Link href="/" className="text-xl font-medium text-white">Stash</Link>
           <div className="flex items-center gap-5 text-sm">
             <Link href={`/u/${stashUser.handle}`} className="text-gray-500 hover:text-white flex items-center gap-1">
-              View profile <ExternalLink className="w-3 h-3" />
+              {t('me.view_profile')} <ExternalLink className="w-3 h-3" />
             </Link>
             <Link href="/me/settings" className="text-gray-500 hover:text-white flex items-center gap-1">
-              <Settings className="w-3.5 h-3.5" /> Settings
+              <Settings className="w-3.5 h-3.5" /> {t('common.settings')}
             </Link>
+            <LangSwitcher />
             <SignOutButton />
           </div>
         </nav>
@@ -89,10 +93,10 @@ export default async function MeDashboard() {
         {/* Greeting */}
         <div className="mb-6">
           <h1 className="text-2xl font-medium text-white mb-1">
-            Hi <span className="text-accent-cyan">@{stashUser.handle}</span>
+            {t('me.greeting_prefix')}<span className="text-accent-cyan">@{stashUser.handle}</span>
           </h1>
           <p className="text-gray-500 text-sm">
-            Your archive lives at{' '}
+            {t('me.profile_at_prefix')}
             <Link href={`/u/${stashUser.handle}`} className="text-gray-300 hover:text-white font-mono">
               /u/{stashUser.handle}
             </Link>
@@ -108,17 +112,17 @@ export default async function MeDashboard() {
                 <span className="text-white text-sm">
                   <span className="font-medium">{plan.plan_name}</span>
                   <span className="text-gray-500 ml-2 text-xs">
-                    {plan.billing_period === 'one_time' ? 'lifetime' : plan.billing_period}
+                    {plan.billing_period === 'one_time' ? t('me.plan_lifetime') : plan.billing_period}
                     {plan.payment_status && ` · ${plan.payment_status}`}
                   </span>
                 </span>
               </div>
               {monthlyLimit != null ? (
                 <span className="text-xs text-gray-400">
-                  <span className="text-white font-medium">{remaining}</span> of {monthlyLimit} uploads left this month
+                  {t('me.plan_uploads_left', { remaining: remaining ?? 0, limit: monthlyLimit })}
                 </span>
               ) : (
-                <span className="text-xs text-gray-400">{used} uploads this month · unlimited</span>
+                <span className="text-xs text-gray-400">{t('me.plan_uploads_unlimited', { used })}</span>
               )}
             </div>
             {monthlyLimit != null && (
@@ -130,12 +134,12 @@ export default async function MeDashboard() {
               </div>
             )}
             <div className="text-gray-600 text-xs mt-2">
-              {total} total uploads to your archive · resets on the 1st of each month
+              {t('me.plan_total', { total })}
             </div>
             {overSoftWarning && (
               <div className="mt-3 flex items-center gap-2 text-yellow-300 text-xs">
                 <AlertTriangle className="w-3.5 h-3.5" />
-                You&apos;ve used {pct}% of your monthly uploads. Upgrade for more headroom.
+                {t('me.plan_soft_warning', { pct })}
               </div>
             )}
           </div>
@@ -150,15 +154,12 @@ export default async function MeDashboard() {
 
         {/* Folders section header with Inbox explainer */}
         <div className="mt-10 mb-4">
-          <h2 className="text-lg text-white mb-2">Your folders</h2>
+          <h2 className="text-lg text-white mb-2">{t('me.folders_title')}</h2>
           <div className="flex items-start gap-2 text-xs text-gray-500 bg-gray-950 border border-gray-800 p-3">
             <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-gray-600" />
             <div>
-              <span className="text-gray-400">Inbox</span> holds uploads not assigned to any folder you&apos;ve made yet — it&apos;s always private.
-              Create a folder to group related files, make it public to share, and move uploads in from Inbox.
-              {userFolders.length === 0 && (
-                <> When you&apos;re ready, hit <span className="text-gray-300">+ New folder</span> below.</>
-              )}
+              {t('me.inbox_explainer')}
+              {userFolders.length === 0 && <> {t('me.inbox_when_empty')}</>}
             </div>
           </div>
         </div>

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Resend } from 'resend'
 import { isAdminAuthenticated } from '@/app/lib/admin-auth'
 import { backendJson } from '@/app/lib/backend'
+import { getServerT } from '@/app/lib/i18n/server'
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY
 const ALERT_FROM = process.env.ALERT_FROM || 'alerts@offsetworks.xyz'
@@ -45,19 +46,20 @@ export async function POST(req: NextRequest) {
     emailStatus = 'no_email'
   } else if (sendEmail && resend) {
     try {
+      const { t } = await getServerT(null)
       const planLine = active_plan?.plan_name
-        ? `<p style="margin:0 0 16px;color:#555">Your account is set up on the <strong>${active_plan.plan_name}</strong> plan.</p>`
+        ? `<p style="margin:0 0 16px;color:#555">${t('emails.claim_plan_line', { plan: active_plan.plan_name })}</p>`
         : ''
       const sendRes = await resend.emails.send({
         from: ALERT_FROM,
         to: user.email,
-        subject: 'Claim your Stash archive',
+        subject: t('emails.claim_subject'),
         html: `<div style="font-family:system-ui,sans-serif;max-width:480px;margin:24px auto;color:#222">
-  <h2 style="margin:0 0 12px">Your Stash account is ready</h2>
-  <p style="margin:0 0 16px;color:#555">An admin created an archive account for you on Stash. Click the button below to claim it — this link expires in 7 days.</p>
+  <h2 style="margin:0 0 12px">${t('emails.claim_heading')}</h2>
+  <p style="margin:0 0 16px;color:#555">${t('emails.claim_body')}</p>
   ${planLine}
-  <p style="margin:0 0 24px"><a href="${claim_url}" style="display:inline-block;background:#000;color:#fff;padding:10px 18px;text-decoration:none;border-radius:4px;font-weight:500">Claim your account</a></p>
-  <p style="margin:0;font-size:12px;color:#888">After claiming you'll pick a public handle and start uploading.</p>
+  <p style="margin:0 0 24px"><a href="${claim_url}" style="display:inline-block;background:#000;color:#fff;padding:10px 18px;text-decoration:none;border-radius:4px;font-weight:500">${t('emails.claim_cta')}</a></p>
+  <p style="margin:0;font-size:12px;color:#888">${t('emails.claim_footer')}</p>
   <p style="margin:8px 0 0;font-size:11px;color:#aaa;word-break:break-all">${claim_url}</p>
 </div>`,
       })

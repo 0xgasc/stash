@@ -310,6 +310,14 @@ if (currentVersion < 6) {
   console.log('✅ Database migrated to v6 (plans, user_plans, pre-claim users)');
 }
 
+if (currentVersion < 7) {
+  db.exec(`
+    ALTER TABLE users ADD COLUMN preferred_locale TEXT NOT NULL DEFAULT 'en';
+  `);
+  db.pragma('user_version = 7');
+  console.log('✅ Database migrated to v7 (user preferred_locale)');
+}
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -732,6 +740,7 @@ const _updateUserProfile = db.prepare(`
     default_accent = COALESCE(@default_accent, default_accent),
     default_font = COALESCE(@default_font, default_font),
     default_fx = COALESCE(@default_fx, default_fx),
+    preferred_locale = COALESCE(@preferred_locale, preferred_locale),
     updated_at = datetime('now')
   WHERE id = @id
 `);
@@ -745,6 +754,7 @@ function updateUserProfile(id, patch) {
     default_accent: patch.default_accent ?? null,
     default_font: patch.default_font ?? null,
     default_fx: patch.default_fx == null ? null : (patch.default_fx ? 1 : 0),
+    preferred_locale: patch.preferred_locale ?? null,
   });
   return getUserById(id);
 }
@@ -1129,7 +1139,7 @@ function listAllUsers({ limit = 100, offset = 0 } = {}) {
   return db.prepare(`
     SELECT u.id, u.handle, u.email, u.display_name, u.supabase_user_id, u.claimed_at,
            u.claim_token IS NOT NULL AS has_pending_claim,
-           u.claim_token_expires_at, u.created_by_admin, u.created_at,
+           u.claim_token_expires_at, u.created_by_admin, u.created_at, u.preferred_locale,
            (SELECT p.name FROM user_plans up JOIN plans p ON p.id = up.plan_id
             WHERE up.user_id = u.id AND up.status = 'active'
             ORDER BY up.created_at DESC LIMIT 1) AS active_plan_name,

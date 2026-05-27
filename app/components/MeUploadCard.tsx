@@ -4,6 +4,7 @@ import { useState, useRef } from 'react'
 import Link from 'next/link'
 import * as tus from 'tus-js-client'
 import { Upload, Loader2, CheckCircle, Copy, ExternalLink, Inbox, Folder as FolderIcon, X } from 'lucide-react'
+import { useI18n } from '@/app/lib/i18n/client'
 
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
@@ -35,6 +36,7 @@ export default function MeUploadCard({
   defaultFolderId: number | null
   handle: string
 }) {
+  const { t } = useI18n()
   const inputRef = useRef<HTMLInputElement>(null)
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(defaultFolderId)
   const [uploading, setUploading] = useState(false)
@@ -52,7 +54,7 @@ export default function MeUploadCard({
     setResult(null)
     setUploading(true)
     setProgress(0)
-    setStage('Starting upload…')
+    setStage(t('me.upload_in_progress'))
 
     try {
       const data = await new Promise<UploadDone>((resolve, reject) => {
@@ -75,7 +77,7 @@ export default function MeUploadCard({
             if (pollInterval) clearInterval(pollInterval)
             const uploadId = tusUpload.url?.split('/').pop()
             setProgress(72)
-            setStage('Pinning on Arweave…')
+            setStage(t('me.upload_pinning'))
 
             pollInterval = setInterval(() => {
               setProgress((p) => p < 95 ? p + Math.random() * 1.5 + 0.3 : p)
@@ -113,7 +115,7 @@ export default function MeUploadCard({
       })
 
       setProgress(100)
-      setStage('Done')
+      setStage(t('me.upload_done'))
       setResult(data)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -144,9 +146,9 @@ export default function MeUploadCard({
   return (
     <div className="bg-gray-950 border border-gray-800 p-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-white text-sm">Upload</h2>
+        <h2 className="text-white text-sm">{t('me.upload_title')}</h2>
         <div className="flex items-center gap-2 text-xs">
-          <span className="text-gray-500">to</span>
+          <span className="text-gray-500">{t('me.upload_to')}</span>
           <select
             value={selectedFolderId ?? ''}
             onChange={(e) => setSelectedFolderId(e.target.value ? Number(e.target.value) : null)}
@@ -155,7 +157,7 @@ export default function MeUploadCard({
           >
             {folders.map(f => (
               <option key={f.id} value={f.id}>
-                {f.is_inbox ? '📥 Inbox (private)' : `📁 ${f.name}`}
+                {f.is_inbox ? t('me.upload_inbox_label') : t('me.upload_folder_label', { name: f.name })}
               </option>
             ))}
           </select>
@@ -165,12 +167,12 @@ export default function MeUploadCard({
       {result ? (
         <div className="bg-black border border-gray-800 p-4">
           <div className="flex items-center gap-2 mb-3 text-green-400 text-sm">
-            <CheckCircle className="w-4 h-4" /> Uploaded {result.filename} ({formatBytes(result.size)})
+            <CheckCircle className="w-4 h-4" /> {t('me.upload_complete', { filename: result.filename, size: formatBytes(result.size) })}
           </div>
           <div className="flex items-center gap-2 bg-gray-950 border border-gray-800 p-2">
             <input type="text" value={result.url} readOnly className="flex-1 bg-transparent text-gray-300 text-xs outline-none font-mono" />
             <button onClick={copyUrl} className="flex items-center gap-1 text-gray-400 hover:text-white text-xs px-2">
-              <Copy className="w-3 h-3" /> {copied ? 'Copied' : 'Copy'}
+              <Copy className="w-3 h-3" /> {copied ? t('me.upload_copied') : t('me.upload_copy')}
             </button>
             <a href={result.url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-white px-2">
               <ExternalLink className="w-3 h-3" />
@@ -178,12 +180,12 @@ export default function MeUploadCard({
           </div>
           <div className="flex items-center justify-between gap-2 mt-3 text-xs">
             <div className="text-gray-500">
-              In {selectedFolder?.is_inbox ? <><Inbox className="w-3 h-3 inline" /> Inbox</> : <><FolderIcon className="w-3 h-3 inline" /> {selectedFolder?.name}</>}
+              {t('me.upload_in_folder')} {selectedFolder?.is_inbox ? <><Inbox className="w-3 h-3 inline" /> {t('me.upload_in_inbox')}</> : <><FolderIcon className="w-3 h-3 inline" /> {selectedFolder?.name}</>}
               {selectedFolder && !selectedFolder.is_inbox && (
-                <> · <Link href={`/u/${handle}/f/${selectedFolder.slug}`} target="_blank" className="text-gray-400 hover:text-white">view public</Link></>
+                <> · <Link href={`/u/${handle}/f/${selectedFolder.slug}`} target="_blank" className="text-gray-400 hover:text-white">{t('me.upload_view_public')}</Link></>
               )}
             </div>
-            <button onClick={() => setResult(null)} className="text-gray-500 hover:text-white">Upload another</button>
+            <button onClick={() => setResult(null)} className="text-gray-500 hover:text-white">{t('me.upload_another')}</button>
           </div>
         </div>
       ) : uploading ? (
@@ -205,8 +207,8 @@ export default function MeUploadCard({
         >
           <input ref={inputRef} type="file" onChange={onFileSelect} className="hidden" />
           <Upload className="w-6 h-6 text-gray-500 mx-auto mb-2" />
-          <p className="text-white text-sm">Drop a file or click to upload</p>
-          <p className="text-gray-500 text-xs mt-1">Goes to {selectedFolder?.is_inbox ? 'Inbox (private)' : selectedFolder?.name || 'Inbox'} · up to 6GB</p>
+          <p className="text-white text-sm">{t('me.upload_drop')}</p>
+          <p className="text-gray-500 text-xs mt-1">{t('me.upload_target', { target: selectedFolder?.is_inbox ? t('me.upload_in_inbox') : selectedFolder?.name || t('me.upload_in_inbox') })}</p>
         </div>
       )}
 

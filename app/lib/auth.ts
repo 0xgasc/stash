@@ -25,6 +25,7 @@ export interface StashUser {
   default_accent: string
   default_font: string
   default_fx: number
+  preferred_locale: string
   handle_changed_at: string | null
   created_at: string
   updated_at: string

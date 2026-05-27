@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { Plus, Folder, Inbox, Eye, EyeOff, Lock, Loader2, AlertTriangle } from 'lucide-react'
+import { useI18n } from '@/app/lib/i18n/client'
 
 interface FolderRow {
   id: number
@@ -24,20 +25,22 @@ const VIS_ICON = {
   private: Lock,
 }
 
-const VIS_LABEL = {
-  public: 'Public',
-  unlisted: 'Unlisted',
-  private: 'Private',
-}
-
-const REASON_MESSAGES: Record<string, string> = {
-  invalid_slug: 'Slug must be a-z, 0-9, dashes or underscores',
-  reserved_slug: 'That slug is reserved',
-  slug_taken: "You already have a folder with that slug",
-}
-
 export default function FolderListClient({ initialFolders }: { initialFolders: FolderRow[] }) {
+  const { t } = useI18n()
   const router = useRouter()
+
+  const VIS_LABEL = {
+    public: t('me.visibility_public'),
+    unlisted: t('me.visibility_unlisted'),
+    private: t('me.visibility_private'),
+  }
+
+  const REASON_MESSAGES: Record<string, string> = {
+    invalid_slug: 'Slug must be a-z, 0-9, dashes or underscores',
+    reserved_slug: 'That slug is reserved',
+    slug_taken: 'You already have a folder with that slug',
+  }
+
   const [folders, setFolders] = useState(initialFolders)
   const [showCreate, setShowCreate] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -83,13 +86,13 @@ export default function FolderListClient({ initialFolders }: { initialFolders: F
   return (
     <div>
       <div className="flex items-center justify-between mb-6">
-        <h2 className="text-lg text-white">Folders</h2>
+        <h2 className="text-lg text-white">{t('me.folders_section_title')}</h2>
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-1.5 bg-white hover:bg-gray-200 text-black px-3 py-1.5 text-sm font-medium"
         >
           <Plus className="w-3.5 h-3.5" />
-          New folder
+          {t('me.new_folder')}
         </button>
       </div>
 
@@ -97,7 +100,7 @@ export default function FolderListClient({ initialFolders }: { initialFolders: F
         <form onSubmit={handleCreate} className="bg-gray-950 border border-gray-800 p-5 mb-4">
           <div className="grid sm:grid-cols-2 gap-4">
             <div>
-              <label className="block text-gray-500 text-xs mb-2">Name</label>
+              <label className="block text-gray-500 text-xs mb-2">{t('me.folder_name_label')}</label>
               <input
                 type="text"
                 value={name}
@@ -105,7 +108,7 @@ export default function FolderListClient({ initialFolders }: { initialFolders: F
                   setName(e.target.value)
                   if (!slug || slug === onSlugify(name)) setSlug(onSlugify(e.target.value))
                 }}
-                placeholder="My Cyberpunk Zines"
+                placeholder={t('me.folder_name_placeholder')}
                 maxLength={80}
                 autoFocus
                 required
@@ -113,14 +116,14 @@ export default function FolderListClient({ initialFolders }: { initialFolders: F
               />
             </div>
             <div>
-              <label className="block text-gray-500 text-xs mb-2">Slug (URL)</label>
+              <label className="block text-gray-500 text-xs mb-2">{t('me.folder_slug_label')}</label>
               <div className="flex items-stretch border border-gray-800 focus-within:border-gray-600">
                 <span className="bg-black text-gray-600 text-xs px-2 py-2 font-mono border-r border-gray-800 flex items-center">/f/</span>
                 <input
                   type="text"
                   value={slug}
                   onChange={(e) => setSlug(onSlugify(e.target.value))}
-                  placeholder="cyberpunk-zines"
+                  placeholder={t('me.folder_slug_placeholder')}
                   maxLength={50}
                   required
                   className="flex-1 bg-black text-white px-3 py-2 text-sm font-mono focus:outline-none"
@@ -140,7 +143,7 @@ export default function FolderListClient({ initialFolders }: { initialFolders: F
               onClick={() => { setShowCreate(false); setCreateError(null) }}
               className="text-gray-500 hover:text-white text-sm px-3 py-1.5"
             >
-              Cancel
+              {t('common.cancel')}
             </button>
             <button
               type="submit"
@@ -148,7 +151,7 @@ export default function FolderListClient({ initialFolders }: { initialFolders: F
               className="flex items-center gap-1.5 bg-white hover:bg-gray-200 disabled:bg-gray-700 disabled:text-gray-500 text-black px-4 py-1.5 text-sm font-medium"
             >
               {creating && <Loader2 className="w-3 h-3 animate-spin" />}
-              Create
+              {creating ? t('me.creating') : t('me.create')}
             </button>
           </div>
         </form>
@@ -157,7 +160,7 @@ export default function FolderListClient({ initialFolders }: { initialFolders: F
       {folders.length === 0 ? (
         <div className="bg-gray-950 border border-gray-800 p-12 text-center">
           <Folder className="w-8 h-8 text-gray-700 mx-auto mb-3" />
-          <p className="text-gray-500 text-sm">No folders yet. Create one to start grouping uploads.</p>
+          <p className="text-gray-500 text-sm">{t('me.folders_empty')}</p>
         </div>
       ) : (
         <div className="grid sm:grid-cols-2 gap-3">
@@ -185,8 +188,8 @@ export default function FolderListClient({ initialFolders }: { initialFolders: F
                   <p className="text-gray-500 text-xs mb-2 line-clamp-2">{f.description}</p>
                 )}
                 <div className="flex items-center gap-3 text-xs text-gray-600 mt-2">
-                  <span>{f.file_count} {f.file_count === 1 ? 'file' : 'files'}</span>
-                  <span className="font-mono">{f.is_inbox ? '(unfiled uploads)' : `/f/${f.slug}`}</span>
+                  <span>{t('me.folder_file_count', { count: f.file_count })}</span>
+                  <span className="font-mono">{f.is_inbox ? t('me.inbox_unfiled') : `/f/${f.slug}`}</span>
                 </div>
               </Link>
             )

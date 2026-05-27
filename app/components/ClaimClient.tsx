@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { Mail, Loader2, AlertTriangle, CheckCircle } from 'lucide-react'
+import { useI18n } from '@/app/lib/i18n/client'
 
 export default function ClaimClient({
   token, email,
@@ -9,6 +10,7 @@ export default function ClaimClient({
   token: string
   email: string
 }) {
+  const { t } = useI18n()
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sent, setSent] = useState(false)
@@ -24,12 +26,12 @@ export default function ClaimClient({
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
-        setError(data.error || 'Could not send sign-in link')
+        setError(data.error || t('auth.err_signin_failed'))
         return
       }
       setSent(true)
     } catch {
-      setError('Connection error')
+      setError(t('auth.err_connection'))
     } finally {
       setSending(false)
     }
@@ -39,11 +41,9 @@ export default function ClaimClient({
     return (
       <div className="bg-gray-950 border border-gray-800 p-5 text-center">
         <CheckCircle className="w-8 h-8 text-green-400 mx-auto mb-3" />
-        <p className="text-white mb-1">Sign-in link sent</p>
-        <p className="text-gray-500 text-sm">
-          Check <span className="text-gray-300">{email}</span> — click the link to claim your account and sign in.
-        </p>
-        <p className="text-gray-600 text-xs mt-3">Link expires in 15 minutes.</p>
+        <p className="text-white mb-1">{t('claim.link_sent_title')}</p>
+        <p className="text-gray-500 text-sm">{t('claim.link_sent_body', { email })}</p>
+        <p className="text-gray-600 text-xs mt-3">{t('claim.link_expires')}</p>
       </div>
     )
   }
@@ -62,11 +62,9 @@ export default function ClaimClient({
         className="w-full bg-white hover:bg-gray-200 disabled:bg-gray-700 disabled:text-gray-500 text-black py-2.5 text-sm font-medium flex items-center justify-center gap-2"
       >
         {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Mail className="w-3.5 h-3.5" />}
-        {sending ? 'Sending link…' : `Send sign-in link to ${email}`}
+        {sending ? t('claim.sending') : t('claim.send_link_button', { email })}
       </button>
-      <p className="text-xs text-gray-600 text-center">
-        We&apos;ll email you a one-time link that signs you in and claims this account.
-      </p>
+      <p className="text-xs text-gray-600 text-center">{t('claim.explainer')}</p>
     </div>
   )
 }
