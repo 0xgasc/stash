@@ -6,12 +6,10 @@
  * with the token preserved as `account_claim_token`, so the auth
  * callback can link the Supabase id automatically.
  */
-import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { Suspense } from 'react'
-import { CheckCircle, AlertTriangle, Mail, Gift } from 'lucide-react'
+import { AlertTriangle, Gift } from 'lucide-react'
 import { backendJson } from '@/app/lib/backend'
-import { getSessionUser } from '@/app/lib/auth'
 import ClaimClient from '@/app/components/ClaimClient'
 
 interface Preview {
@@ -58,10 +56,22 @@ export default async function ClaimPage({ searchParams }: { searchParams: Promis
   }
 
   const preview = previewRes.data
-  const sessionUser = await getSessionUser()
 
-  // If signed in with a different email than the claim is for, warn them.
-  const emailMismatch = sessionUser && sessionUser.email && sessionUser.email.toLowerCase() !== preview.email.toLowerCase()
+  if (!preview.email) {
+    return (
+      <div className="min-h-screen bg-black flex items-center justify-center px-4">
+        <div className="max-w-md text-center">
+          <AlertTriangle className="w-8 h-8 text-yellow-400 mx-auto mb-4" />
+          <h1 className="text-xl font-medium text-white mb-2">This claim link isn&apos;t complete yet</h1>
+          <p className="text-gray-500 text-sm mb-6">
+            The admin who set up your account hasn&apos;t assigned an email yet.
+            Ask them to send you a fresh link.
+          </p>
+          <Link href="/auth" className="text-gray-400 hover:text-white text-sm">Sign in to an existing account →</Link>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-black flex items-center justify-center px-4">
@@ -94,19 +104,8 @@ export default async function ClaimPage({ searchParams }: { searchParams: Promis
           </div>
         </div>
 
-        {emailMismatch && (
-          <div className="bg-yellow-950/30 border border-yellow-900/50 text-yellow-300 text-xs p-3 mb-4 flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-            <span>
-              You&apos;re signed in as <span className="font-mono">{sessionUser?.email}</span> but this claim
-              is for <span className="font-mono">{preview.email}</span>. Sign out and sign in with the right
-              email to claim.
-            </span>
-          </div>
-        )}
-
         <Suspense fallback={<div className="text-gray-500 text-sm text-center">Loading…</div>}>
-          <ClaimClient token={token} hasSession={!!sessionUser} emailMismatch={!!emailMismatch} email={preview.email} />
+          <ClaimClient token={token} email={preview.email} />
         </Suspense>
       </div>
     </div>

@@ -2,14 +2,12 @@
 
 import { useRouter } from 'next/navigation'
 import { LogOut } from 'lucide-react'
-import { createClient } from '@/app/lib/supabase'
 
 export default function SignOutButton() {
   const router = useRouter()
-  const supabase = createClient()
 
   const handleSignOut = async () => {
-    if (supabase) await supabase.auth.signOut()
+    await fetch('/api/auth/signout', { method: 'POST' })
     router.push('/')
     router.refresh()
   }

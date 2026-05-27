@@ -7,10 +7,11 @@
  * user_id in the request body. Never trust user_id from a browser.
  */
 const express = require('express');
+const crypto = require('crypto');
 const {
   upsertUser, getUserById, getUserByAuthId, getUserByHandle, claimHandle, updateUserProfile,
   claimAccount, getUserByClaimToken, getActiveUserPlan, getUserMonthlyUsage,
-  getAllPlans,
+  getAllPlans, db,
 } = require('../db');
 const { requireAdminSecret } = require('../middleware/apiAuth');
 
@@ -44,6 +45,63 @@ router.get('/me', requireAdminSecret, (req, res) => {
 // Public list of active plans (for pricing pages / upgrade UI)
 router.get('/plans', (req, res) => {
   res.json({ plans: getAllPlans({ activeOnly: true }) });
+});
+
+// =====================================================
+// POST /users/email-signin — resolve email → user_id for Resend-based auth
+// Body: { email, claim_token? }
+//
+// Cases:
+//   A. claim_token supplied + valid → claim that pre-created account
+//      (sets supabase_user_id = generated uuid, claimed_at = now).
+//   B. email matches a claimed user → that's their login.
+//   C. email matches a placeholder (admin-pre-created, supabase_user_id null,
+//      no claim_token in request) → auto-claim with a fresh uuid.
+//   D. no match → create a new user (upsertUser with fresh uuid).
+//
+// Returns { user_id, was_new, was_claim }.
+// =====================================================
+router.post('/email-signin', requireAdminSecret, (req, res) => {
+  const { email, claim_token } = req.body || {};
+  if (!email || !email.includes('@')) return res.status(400).json({ error: 'email required' });
+  const normEmail = String(email).trim().toLowerCase();
+
+  // Case A — explicit claim_token
+  if (claim_token) {
+    const pre = getUserByClaimToken(claim_token);
+    if (!pre) return res.status(400).json({ error: 'invalid_or_expired_claim_token' });
+    if (pre.email && pre.email.toLowerCase() !== normEmail) {
+      return res.status(400).json({ error: 'email_does_not_match_claim_target' });
+    }
+    const externalId = crypto.randomUUID();
+    const result = claimAccount(claim_token, externalId);
+    if (!result.ok) return res.status(400).json(result);
+    return res.json({ user_id: result.user.id, was_new: false, was_claim: true });
+  }
+
+  // Look up any user with that email
+  const existing = db.prepare('SELECT * FROM users WHERE LOWER(email) = ? LIMIT 1').get(normEmail);
+
+  if (existing && existing.supabase_user_id) {
+    // Case B — returning user
+    return res.json({ user_id: existing.id, was_new: false, was_claim: false });
+  }
+
+  if (existing && !existing.supabase_user_id) {
+    // Case C — placeholder with this email assigned; auto-claim
+    const externalId = crypto.randomUUID();
+    db.prepare(`
+      UPDATE users SET supabase_user_id = ?, claimed_at = datetime('now'),
+        claim_token = NULL, claim_token_expires_at = NULL, updated_at = datetime('now')
+      WHERE id = ?
+    `).run(externalId, existing.id);
+    return res.json({ user_id: existing.id, was_new: false, was_claim: true });
+  }
+
+  // Case D — brand new user
+  const id = crypto.randomUUID();
+  const user = upsertUser({ id, email: normEmail });
+  return res.json({ user_id: user.id, was_new: true, was_claim: false });
 });
 
 // =====================================================

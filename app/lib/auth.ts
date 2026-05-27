@@ -9,9 +9,9 @@
  *                         OR the SQLite users.is_admin flag for logged-in users.
  */
 import { redirect } from 'next/navigation'
-import { createServerSupabaseClient } from '@/app/lib/supabase-server'
 import { backendJson } from '@/app/lib/backend'
 import { isAdminAuthenticated } from '@/app/lib/admin-auth'
+import { getSessionUserId } from '@/app/lib/user-auth'
 
 export interface StashUser {
   id: string
@@ -30,14 +30,20 @@ export interface StashUser {
   updated_at: string
 }
 
-export async function getSessionUser() {
-  const supabase = await createServerSupabaseClient()
-  if (!supabase) return null
-  const { data } = await supabase.auth.getUser()
-  return data.user || null
+/**
+ * Returns the Supabase-style "session user" — but with our own session
+ * cookie now, not Supabase. The shape `{ id, email }` is preserved so
+ * call sites don't break.
+ */
+export async function getSessionUser(): Promise<{ id: string; email: string | null } | null> {
+  const userId = await getSessionUserId()
+  if (!userId) return null
+  const stash = await getStashUserById(userId)
+  if (!stash) return null
+  return { id: stash.id, email: stash.email }
 }
 
-/** Look up the SQLite users row for a Supabase user id. Returns null if missing. */
+/** Look up the SQLite users row by internal id. Returns null if missing. */
 export async function getStashUserById(id: string): Promise<StashUser | null> {
   const res = await backendJson<{ user: StashUser }>(`/api/v1/users/me?user_id=${encodeURIComponent(id)}`)
   if (!res.ok || !res.data) return null
@@ -45,44 +51,32 @@ export async function getStashUserById(id: string): Promise<StashUser | null> {
 }
 
 /**
- * Requires a logged-in user. Returns both the Supabase identity and the SQLite profile.
+ * Requires a logged-in user. Returns both the session identity and the SQLite profile.
  * @param opts.requireHandle If true (default), redirects to /me/setup when handle is null.
  */
 export async function requireUser(opts: { requireHandle?: boolean } = {}) {
   const requireHandle = opts.requireHandle ?? true
-  const sessionUser = await getSessionUser()
-  if (!sessionUser) redirect('/auth')
+  const userId = await getSessionUserId()
+  if (!userId) redirect('/auth')
 
-  let stashUser = await getStashUserById(sessionUser.id)
-
-  // If Supabase user exists but SQLite row doesn't (bootstrap missed), create it lazily.
+  const stashUser = await getStashUserById(userId)
   if (!stashUser) {
-    const boot = await backendJson<{ user: StashUser }>('/api/v1/users/bootstrap', {
-      method: 'POST',
-      body: JSON.stringify({
-        id: sessionUser.id,
-        email: sessionUser.email,
-        display_name: sessionUser.user_metadata?.full_name || sessionUser.user_metadata?.name || null,
-      }),
-    })
-    stashUser = boot.data?.user || null
-  }
-
-  if (!stashUser) {
-    // Backend unreachable — hard-fail rather than silently leak access.
-    throw new Error('Unable to load user profile from backend')
+    // Cookie points at a user_id the backend doesn't recognise — likely a
+    // stale cookie from a wiped DB. Force re-auth.
+    redirect('/auth?magic_error=session_invalid')
   }
 
   if (requireHandle && !stashUser.handle) redirect('/me/setup')
 
+  const sessionUser = { id: stashUser.id, email: stashUser.email }
   return { sessionUser, stashUser }
 }
 
 /** True if the current request is admin (HMAC cookie OR is_admin flag). */
 export async function isAdmin(): Promise<boolean> {
   if (await isAdminAuthenticated()) return true
-  const sessionUser = await getSessionUser()
-  if (!sessionUser) return false
-  const stashUser = await getStashUserById(sessionUser.id)
+  const userId = await getSessionUserId()
+  if (!userId) return false
+  const stashUser = await getStashUserById(userId)
   return !!(stashUser && stashUser.is_admin)
 }
