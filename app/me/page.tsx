@@ -1,16 +1,20 @@
 /**
  * /me — owner dashboard.
  *
- * Shows the user's folders (with Inbox first), a "new folder" button,
- * and a sign-out link. Server-rendered with initial data; folder
- * mutations happen client-side and re-fetch.
+ * Layout:
+ *   1. Greeting + public-profile link + settings/signout in header
+ *   2. Plan card with monthly usage bar
+ *   3. Upload card (folder picker + dropzone)
+ *   4. Inbox explainer
+ *   5. Folders list with "new folder" button
  */
 import Link from 'next/link'
-import { AlertTriangle, Zap } from 'lucide-react'
+import { AlertTriangle, Zap, Settings, ExternalLink, Info } from 'lucide-react'
 import { requireUser } from '@/app/lib/auth'
 import { backendJson } from '@/app/lib/backend'
 import FolderListClient from '@/app/components/FolderListClient'
 import SignOutButton from '@/app/components/SignOutButton'
+import MeUploadCard from '@/app/components/MeUploadCard'
 
 interface Folder {
   id: number
@@ -55,17 +59,26 @@ export default async function MeDashboard() {
   const usage = meData?.usage
   const monthlyLimit = plan?.monthly_upload_limit ?? null
   const used = usage?.uploads_this_month ?? 0
+  const total = usage?.total_uploads ?? 0
   const pct = monthlyLimit && monthlyLimit > 0 ? Math.min(100, Math.round((used / monthlyLimit) * 100)) : 0
   const overSoftWarning = monthlyLimit != null && pct >= 90
+  const remaining = monthlyLimit != null ? Math.max(0, monthlyLimit - used) : null
+
+  const inboxFolder = folders.find(f => f.is_inbox)
+  const userFolders = folders.filter(f => !f.is_inbox)
+  const folderOptions = folders.map(f => ({ id: f.id, name: f.name, is_inbox: f.is_inbox, slug: f.slug }))
 
   return (
     <div className="min-h-screen bg-black">
       <header className="container mx-auto px-4 py-6">
         <nav className="flex justify-between items-center">
           <Link href="/" className="text-xl font-medium text-white">Stash</Link>
-          <div className="flex items-center gap-6 text-sm">
-            <Link href={`/u/${stashUser.handle}`} className="text-gray-500 hover:text-white">
-              View public profile →
+          <div className="flex items-center gap-5 text-sm">
+            <Link href={`/u/${stashUser.handle}`} className="text-gray-500 hover:text-white flex items-center gap-1">
+              View profile <ExternalLink className="w-3 h-3" />
+            </Link>
+            <Link href="/me/settings" className="text-gray-500 hover:text-white flex items-center gap-1">
+              <Settings className="w-3.5 h-3.5" /> Settings
             </Link>
             <SignOutButton />
           </div>
@@ -73,7 +86,8 @@ export default async function MeDashboard() {
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
-        <div className="mb-8">
+        {/* Greeting */}
+        <div className="mb-6">
           <h1 className="text-2xl font-medium text-white mb-1">
             Hi <span className="text-accent-cyan">@{stashUser.handle}</span>
           </h1>
@@ -101,7 +115,7 @@ export default async function MeDashboard() {
               </div>
               {monthlyLimit != null ? (
                 <span className="text-xs text-gray-400">
-                  {used} / {monthlyLimit} uploads this month
+                  <span className="text-white font-medium">{remaining}</span> of {monthlyLimit} uploads left this month
                 </span>
               ) : (
                 <span className="text-xs text-gray-400">{used} uploads this month · unlimited</span>
@@ -115,6 +129,9 @@ export default async function MeDashboard() {
                 />
               </div>
             )}
+            <div className="text-gray-600 text-xs mt-2">
+              {total} total uploads to your archive · resets on the 1st of each month
+            </div>
             {overSoftWarning && (
               <div className="mt-3 flex items-center gap-2 text-yellow-300 text-xs">
                 <AlertTriangle className="w-3.5 h-3.5" />
@@ -123,6 +140,28 @@ export default async function MeDashboard() {
             )}
           </div>
         )}
+
+        {/* Upload */}
+        <MeUploadCard
+          folders={folderOptions}
+          defaultFolderId={inboxFolder?.id ?? null}
+          handle={stashUser.handle!}
+        />
+
+        {/* Folders section header with Inbox explainer */}
+        <div className="mt-10 mb-4">
+          <h2 className="text-lg text-white mb-2">Your folders</h2>
+          <div className="flex items-start gap-2 text-xs text-gray-500 bg-gray-950 border border-gray-800 p-3">
+            <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 text-gray-600" />
+            <div>
+              <span className="text-gray-400">Inbox</span> holds uploads not assigned to any folder you&apos;ve made yet — it&apos;s always private.
+              Create a folder to group related files, make it public to share, and move uploads in from Inbox.
+              {userFolders.length === 0 && (
+                <> When you&apos;re ready, hit <span className="text-gray-300">+ New folder</span> below.</>
+              )}
+            </div>
+          </div>
+        </div>
 
         <FolderListClient initialFolders={folders} />
       </main>
