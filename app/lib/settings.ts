@@ -15,7 +15,7 @@ export interface AppSettings {
 }
 
 export const SETTING_DEFAULTS: AppSettings = {
-  MAX_ANONYMOUS_UPLOADS: 3,
+  MAX_ANONYMOUS_UPLOADS: 1,
   MAX_FILE_SIZE_MB: 6144,
   LINK_EXPIRY_DAYS: 14,
 }

@@ -22,6 +22,14 @@ interface UploadLimit {
   maxFileSizeMB: number
 }
 
+interface UserUsage {
+  daily_remaining: number | null
+  daily_upload_limit: number | null
+  daily_limit_reached: boolean
+  plan_slug: string | null
+  plan_name: string | null
+}
+
 interface UserFolder {
   id: number
   slug: string
@@ -48,6 +56,7 @@ export default function HomeUploadHero() {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [uploadLimit, setUploadLimit] = useState<UploadLimit | null>(null)
+  const [userUsage, setUserUsage] = useState<UserUsage | null>(null)
   const [folders, setFolders] = useState<UserFolder[]>([])
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null)
 
@@ -60,6 +69,14 @@ export default function HomeUploadHero() {
     }
   }, [user])
 
+  const fetchUserUsage = useCallback(() => {
+    if (!user) { setUserUsage(null); return }
+    fetch('/api/me/usage')
+      .then(r => r.ok ? r.json() : null)
+      .then(d => d && setUserUsage(d))
+      .catch(() => {})
+  }, [user])
+
   const fetchFolders = useCallback(() => {
     if (!user) { setFolders([]); return }
     fetch('/api/me/folders')
@@ -69,6 +86,7 @@ export default function HomeUploadHero() {
   }, [user])
 
   useEffect(() => { fetchLimit() }, [fetchLimit])
+  useEffect(() => { fetchUserUsage() }, [fetchUserUsage])
   useEffect(() => { fetchFolders() }, [fetchFolders])
 
   const handleUpload = async (file: File) => {
@@ -91,6 +109,18 @@ export default function HomeUploadHero() {
         const limitData = await limitRes.json()
         if (limitData.limitReached) {
           setUploadLimit({ remaining: 0, limit: limitData.limit, limitReached: true, maxFileSizeMB: limitData.maxFileSizeMB })
+          setUploading(false)
+          return
+        }
+      } catch {
+        // Continue if check fails
+      }
+    } else {
+      try {
+        const usageRes = await fetch('/api/me/usage')
+        const usageData = await usageRes.json()
+        if (usageData.daily_limit_reached) {
+          setUserUsage(usageData)
           setUploading(false)
           return
         }
@@ -213,11 +243,12 @@ export default function HomeUploadHero() {
       setUploadStage('Complete')
       setUploadResult(result)
 
-      if (!user && result.claimToken && isConfigured) {
+      if (!user) {
         setShowAuthModal(true)
       }
 
       fetchLimit()
+      fetchUserUsage()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Upload failed')
     }
@@ -262,30 +293,65 @@ export default function HomeUploadHero() {
     setUploadStage('')
   }
 
-  // Limit reached state
+  // Anon limit reached — prompt sign-up
   if (!user && uploadLimit?.limitReached) {
     return (
       <div className="max-w-2xl mx-auto">
-        <div className="bg-black p-12 border-2 border-accent-red shadow-brutal-red text-center">
-          <div className="w-14 h-14 border-2 border-accent-red flex items-center justify-center mx-auto mb-6">
-            <Upload className="w-6 h-6 text-accent-red" />
+        <div className="bg-black p-12 border-2 border-accent-cyan shadow-brutal text-center">
+          <div className="w-14 h-14 border-2 border-accent-cyan flex items-center justify-center mx-auto mb-6">
+            <Upload className="w-6 h-6 text-accent-cyan" />
           </div>
-          <h3 className="text-lg font-bold text-white mb-2 uppercase tracking-wide">Limit reached</h3>
-          <p className="text-gray-500 text-sm mb-6">
-            You&apos;ve used all {uploadLimit.limit} free uploads. Create an account to continue.
+          <h3 className="text-lg font-bold text-white mb-2 uppercase tracking-wide">Create a free account</h3>
+          <p className="text-gray-400 text-sm mb-2">
+            Get 3 uploads per day — free forever.
+          </p>
+          <p className="text-gray-600 text-xs mb-6">
+            Organize files in folders, share public archive pages, and never lose a link.
           </p>
           <button
             onClick={() => setShowAuthModal(true)}
-            className="bg-accent-red hover:bg-red-400 text-black font-bold py-3 px-8 transition-colors uppercase tracking-wider text-sm"
+            className="bg-accent-cyan hover:bg-cyan-300 text-black font-bold py-3 px-8 transition-colors uppercase tracking-wider text-sm"
           >
-            Create account
+            Sign up free
           </button>
+          <p className="text-gray-600 text-xs mt-4">
+            Need more? <a href="/pricing" className="text-accent-cyan hover:text-white">See plans</a>
+          </p>
         </div>
 
         <AuthModal
           open={showAuthModal}
           onClose={() => setShowAuthModal(false)}
         />
+      </div>
+    )
+  }
+
+  // Logged-in user hit daily limit — prompt upgrade
+  if (user && userUsage?.daily_limit_reached) {
+    return (
+      <div className="max-w-2xl mx-auto">
+        <div className="bg-black p-12 border-2 border-yellow-400/60 text-center">
+          <div className="w-14 h-14 border-2 border-yellow-400/60 flex items-center justify-center mx-auto mb-6">
+            <Upload className="w-6 h-6 text-yellow-400" />
+          </div>
+          <h3 className="text-lg font-bold text-white mb-2 uppercase tracking-wide">Daily limit reached</h3>
+          <p className="text-gray-400 text-sm mb-2">
+            You&apos;ve used all {userUsage.daily_upload_limit} uploads for today.
+          </p>
+          <p className="text-gray-600 text-xs mb-6">
+            Your limit resets at midnight UTC. Upgrade for more daily uploads.
+          </p>
+          <a
+            href="/pricing"
+            className="inline-block bg-accent-cyan hover:bg-cyan-300 text-black font-bold py-3 px-8 transition-colors uppercase tracking-wider text-sm"
+          >
+            Upgrade plan
+          </a>
+          <p className="text-gray-600 text-xs mt-4">
+            Or upload from <a href="/me" className="text-accent-cyan hover:text-white">your dashboard</a> tomorrow.
+          </p>
+        </div>
       </div>
     )
   }
@@ -339,17 +405,20 @@ export default function HomeUploadHero() {
             </div>
           </div>
 
-          {/* Auth prompt */}
-          {!user && uploadResult.claimToken && isConfigured && (
-            <div className="border border-accent-orange/30 bg-gray-950 p-4 mb-6">
-              <p className="text-gray-400 text-sm text-center mb-3">
-                Sign in to save this file to your dashboard
+          {/* Sign-up prompt after anonymous upload */}
+          {!user && (
+            <div className="border border-accent-cyan/30 bg-gray-950 p-4 mb-6">
+              <p className="text-white text-sm text-center mb-1 font-medium">
+                Create a free account
+              </p>
+              <p className="text-gray-500 text-xs text-center mb-3">
+                Get 3 uploads/day, organize in folders, and share permanent archive pages.
               </p>
               <button
                 onClick={() => setShowAuthModal(true)}
-                className="w-full bg-accent-orange hover:bg-orange-400 text-black font-bold py-2 px-4 transition-colors uppercase tracking-wider text-sm"
+                className="w-full bg-accent-cyan hover:bg-cyan-300 text-black font-bold py-2 px-4 transition-colors uppercase tracking-wider text-sm"
               >
-                Claim file
+                Sign up free
               </button>
             </div>
           )}
@@ -440,9 +509,19 @@ export default function HomeUploadHero() {
               Up to {((uploadLimit?.maxFileSizeMB ?? 6144) / 1024).toFixed(0)}GB // any format
             </p>
             <div className="flex items-center justify-center gap-6 text-xs text-gray-500 uppercase tracking-wider">
-              <span>No account needed</span>
-              {!user && uploadLimit && uploadLimit.remaining < uploadLimit.limit && (
-                <span className="text-accent-cyan/60">{uploadLimit.remaining}/{uploadLimit.limit} uploads left</span>
+              {user ? (
+                userUsage?.daily_upload_limit != null ? (
+                  <span className="text-accent-cyan/60">{userUsage.daily_remaining}/{userUsage.daily_upload_limit} uploads left today</span>
+                ) : (
+                  <span>Unlimited uploads</span>
+                )
+              ) : (
+                <>
+                  <span>No account needed</span>
+                  {uploadLimit && uploadLimit.remaining < uploadLimit.limit && (
+                    <span className="text-accent-cyan/60">{uploadLimit.remaining}/{uploadLimit.limit} free uploads left</span>
+                  )}
+                </>
               )}
             </div>
           </div>

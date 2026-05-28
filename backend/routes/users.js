@@ -10,7 +10,7 @@ const express = require('express');
 const crypto = require('crypto');
 const {
   upsertUser, getUserById, getUserByAuthId, getUserByHandle, claimHandle, updateUserProfile,
-  claimAccount, getUserByClaimToken, getActiveUserPlan, getUserMonthlyUsage,
+  claimAccount, getUserByClaimToken, getActiveUserPlan, getUserMonthlyUsage, getUserDailyUsage,
   getAllPlans, db,
 } = require('../db');
 const { requireAdminSecret } = require('../middleware/apiAuth');
@@ -39,7 +39,9 @@ router.get('/me', requireAdminSecret, (req, res) => {
   if (!user) return res.status(404).json({ error: 'not_found' });
   const active_plan = getActiveUserPlan(user.id);
   const usage = getUserMonthlyUsage(user.id);
-  res.json({ user, active_plan, usage });
+  const uploads_today = getUserDailyUsage(user.id);
+  const daily_upload_limit = active_plan?.daily_upload_limit ?? null;
+  res.json({ user, active_plan, usage, uploads_today, daily_upload_limit });
 });
 
 // Public list of active plans (for pricing pages / upgrade UI)

@@ -318,6 +318,15 @@ if (currentVersion < 7) {
   console.log('✅ Database migrated to v7 (user preferred_locale)');
 }
 
+if (currentVersion < 8) {
+  db.exec(`
+    ALTER TABLE plans ADD COLUMN daily_upload_limit INTEGER;
+    UPDATE plans SET daily_upload_limit = 3 WHERE slug = 'drift';
+  `);
+  db.pragma('user_version = 8');
+  console.log('✅ Database migrated to v8 (daily_upload_limit on plans)');
+}
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -1272,7 +1281,7 @@ function assignPlan(userId, { plan_id, status = 'active', payment_status = null,
 
 function getActiveUserPlan(userId) {
   const row = db.prepare(`
-    SELECT up.*, p.slug AS plan_slug, p.name AS plan_name, p.monthly_upload_limit, p.total_upload_limit,
+    SELECT up.*, p.slug AS plan_slug, p.name AS plan_name, p.monthly_upload_limit, p.daily_upload_limit, p.total_upload_limit,
            p.billing_period, p.price_cents, p.currency, p.features_json
     FROM user_plans up JOIN plans p ON p.id = up.plan_id
     WHERE up.user_id = ? AND up.status IN ('active','pending')
@@ -1298,6 +1307,15 @@ function getUserMonthlyUsage(userId) {
   `).get(userId);
   const total = db.prepare('SELECT COUNT(*) AS total FROM uploads WHERE user_id = ?').get(userId);
   return { uploads_this_month: row.uploads_this_month, total_uploads: total.total };
+}
+
+function getUserDailyUsage(userId) {
+  const row = db.prepare(`
+    SELECT COUNT(*) AS uploads_today
+    FROM uploads
+    WHERE user_id = ? AND created_at >= datetime('now', 'start of day')
+  `).get(userId);
+  return row.uploads_today;
 }
 
 module.exports = {
@@ -1341,5 +1359,5 @@ module.exports = {
   // plans
   getAllPlans, getPlanById, getPlanBySlug, getDefaultPlan,
   createPlan, updatePlan,
-  assignPlan, getActiveUserPlan, getUserPlanHistory, getUserMonthlyUsage,
+  assignPlan, getActiveUserPlan, getUserPlanHistory, getUserMonthlyUsage, getUserDailyUsage,
 };

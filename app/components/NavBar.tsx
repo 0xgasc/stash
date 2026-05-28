@@ -24,6 +24,9 @@ export default function NavBar() {
           Stash
         </Link>
         <div className="flex items-center gap-6 text-sm">
+          <Link href="/about" className="text-gray-500 hover:text-accent-cyan transition-colors">
+            About
+          </Link>
           <Link href="/pricing" className="text-gray-500 hover:text-accent-cyan transition-colors">
             Pricing
           </Link>

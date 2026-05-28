@@ -38,9 +38,12 @@ interface UserMeResponse {
     plan_slug?: string
     billing_period?: 'free' | 'monthly' | 'yearly' | 'one_time'
     monthly_upload_limit?: number | null
+    daily_upload_limit?: number | null
     payment_status?: string | null
   } | null
   usage: { uploads_this_month: number; total_uploads: number }
+  uploads_today?: number
+  daily_upload_limit?: number | null
 }
 
 export default async function MeDashboard() {
@@ -66,6 +69,13 @@ export default async function MeDashboard() {
   const pct = monthlyLimit && monthlyLimit > 0 ? Math.min(100, Math.round((used / monthlyLimit) * 100)) : 0
   const overSoftWarning = monthlyLimit != null && pct >= 90
   const remaining = monthlyLimit != null ? Math.max(0, monthlyLimit - used) : null
+
+  const uploadsToday = meData?.uploads_today ?? 0
+  const dailyLimit = meData?.daily_upload_limit ?? null
+  const dailyRemaining = dailyLimit != null ? Math.max(0, dailyLimit - uploadsToday) : null
+  const dailyPct = dailyLimit && dailyLimit > 0 ? Math.min(100, Math.round((uploadsToday / dailyLimit) * 100)) : 0
+  const dailyLimitHit = dailyLimit != null && uploadsToday >= dailyLimit
+  const isFree = plan?.billing_period === 'free'
 
   const inboxFolder = folders.find(f => f.is_inbox)
   const userFolders = folders.filter(f => !f.is_inbox)
@@ -117,26 +127,70 @@ export default async function MeDashboard() {
                   </span>
                 </span>
               </div>
-              {monthlyLimit != null ? (
-                <span className="text-xs text-gray-400">
-                  {t('me.plan_uploads_left', { remaining: remaining ?? 0, limit: monthlyLimit })}
-                </span>
-              ) : (
-                <span className="text-xs text-gray-400">{t('me.plan_uploads_unlimited', { used })}</span>
+              {isFree && (
+                <Link href="/pricing" className="text-accent-cyan text-xs hover:text-white transition-colors">
+                  {t('me.upgrade')} →
+                </Link>
               )}
             </div>
-            {monthlyLimit != null && (
-              <div className="w-full bg-gray-900 h-1.5 overflow-hidden">
-                <div
-                  className={`h-full transition-all ${overSoftWarning ? 'bg-yellow-400' : 'bg-accent-cyan'}`}
-                  style={{ width: `${pct}%` }}
-                />
+
+            {/* Daily limit bar */}
+            {dailyLimit != null && (
+              <div className="mb-3">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="text-gray-500">{t('me.daily_uploads')}</span>
+                  <span className={dailyLimitHit ? 'text-yellow-300' : 'text-gray-400'}>
+                    {t('me.daily_remaining', { remaining: dailyRemaining ?? 0, limit: dailyLimit })}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-900 h-1.5 overflow-hidden">
+                  <div
+                    className={`h-full transition-all ${dailyLimitHit ? 'bg-yellow-400' : 'bg-accent-cyan'}`}
+                    style={{ width: `${dailyPct}%` }}
+                  />
+                </div>
               </div>
             )}
-            <div className="text-gray-600 text-xs mt-2">
+
+            {/* Monthly limit bar */}
+            {monthlyLimit != null && (
+              <div className="mb-2">
+                <div className="flex items-center justify-between text-xs mb-1">
+                  <span className="text-gray-500">{t('me.monthly_uploads')}</span>
+                  <span className="text-gray-400">
+                    {t('me.plan_uploads_left', { remaining: remaining ?? 0, limit: monthlyLimit })}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-900 h-1.5 overflow-hidden">
+                  <div
+                    className={`h-full transition-all ${overSoftWarning ? 'bg-yellow-400' : 'bg-accent-cyan'}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+              </div>
+            )}
+            {monthlyLimit == null && (
+              <div className="text-xs text-gray-400 mb-2">
+                {t('me.plan_uploads_unlimited', { used })}
+              </div>
+            )}
+
+            <div className="text-gray-600 text-xs">
               {t('me.plan_total', { total })}
             </div>
-            {overSoftWarning && (
+
+            {dailyLimitHit && (
+              <div className="mt-3 bg-gray-900 border border-yellow-400/20 p-3">
+                <div className="flex items-center gap-2 text-yellow-300 text-xs mb-2">
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  {t('me.daily_limit_hit')}
+                </div>
+                <Link href="/pricing" className="text-accent-cyan text-xs hover:text-white transition-colors">
+                  {t('me.upgrade_for_more')} →
+                </Link>
+              </div>
+            )}
+            {overSoftWarning && !dailyLimitHit && (
               <div className="mt-3 flex items-center gap-2 text-yellow-300 text-xs">
                 <AlertTriangle className="w-3.5 h-3.5" />
                 {t('me.plan_soft_warning', { pct })}
