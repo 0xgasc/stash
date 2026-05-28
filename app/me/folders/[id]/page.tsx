@@ -20,6 +20,8 @@ interface Folder {
   visibility: 'public' | 'unlisted' | 'private'
   default_layout: 'grid' | 'list' | 'timeline'
   accent_color: string | null
+  access_mode: 'open' | 'password' | 'email' | 'password_email'
+  has_password?: boolean
   is_inbox: number
 }
 
@@ -33,27 +35,37 @@ interface Upload {
   created_at: string
 }
 
+interface MeResp {
+  active_plan: { features_json?: string } | null
+}
+
 export default async function FolderEditorPage({ params }: { params: Promise<{ id: string }> }) {
-  const { stashUser } = await requireUser()
+  const { stashUser, sessionUser } = await requireUser()
   const { id } = await params
 
-  const folderRes = await backendJson<{ folder: Folder }>(
-    `/api/v1/me/folders/${id}?user_id=${encodeURIComponent(stashUser.id)}`,
-    { cache: 'no-store' }
-  )
-  if (!folderRes.ok || !folderRes.data) redirect('/me')
-  const folder = folderRes.data.folder
-
-  const [inFolderRes, inboxRes] = await Promise.all([
+  const [folderRes, inFolderRes, inboxRes, meRes] = await Promise.all([
+    backendJson<{ folder: Folder }>(
+      `/api/v1/me/folders/${id}?user_id=${encodeURIComponent(stashUser.id)}`,
+      { cache: 'no-store' }
+    ),
     backendJson<{ uploads: Upload[] }>(
-      `/api/v1/me/uploads?user_id=${encodeURIComponent(stashUser.id)}&folder_id=${folder.id}&limit=200`,
+      `/api/v1/me/uploads?user_id=${encodeURIComponent(stashUser.id)}&folder_id=${id}&limit=200`,
       { cache: 'no-store' }
     ),
     backendJson<{ uploads: Upload[] }>(
       `/api/v1/me/uploads?user_id=${encodeURIComponent(stashUser.id)}&limit=200`,
       { cache: 'no-store' }
     ),
+    backendJson<MeResp>(
+      `/api/v1/users/me?user_id=${encodeURIComponent(sessionUser.id)}`,
+      { cache: 'no-store' }
+    ),
   ])
+  if (!folderRes.ok || !folderRes.data) redirect('/me')
+  const folder = folderRes.data.folder
+
+  let features: Record<string, boolean> = {}
+  try { features = JSON.parse(meRes.data?.active_plan?.features_json || '{}') } catch { /* ignore */ }
 
   return (
     <div className="min-h-screen bg-black">
@@ -70,6 +82,8 @@ export default async function FolderEditorPage({ params }: { params: Promise<{ i
           folder={folder}
           filesInFolder={inFolderRes.data?.uploads || []}
           inboxFiles={inboxRes.data?.uploads || []}
+          canPasswordLock={!!features.password_lock}
+          canEmailShare={!!features.email_sharing}
         />
       </main>
     </div>

@@ -5,7 +5,9 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   Loader2, Save, Trash2, ExternalLink, Plus, X, Eye, EyeOff, Lock, AlertTriangle, Inbox,
+  Shield, Mail, KeyRound,
 } from 'lucide-react'
+import { useI18n } from '@/app/lib/i18n/client'
 
 interface Folder {
   id: number
@@ -16,7 +18,14 @@ interface Folder {
   visibility: 'public' | 'unlisted' | 'private'
   default_layout: 'grid' | 'list' | 'timeline'
   accent_color: string | null
+  access_mode: 'open' | 'password' | 'email' | 'password_email'
+  has_password?: boolean
   is_inbox: number
+}
+
+interface AccessEntry {
+  email: string
+  created_at: string
 }
 
 interface Upload {
@@ -46,13 +55,17 @@ function formatBytes(b: number) {
 
 export default function FolderEditor({
   handle, folder: initial, filesInFolder: initialIn, inboxFiles: initialInbox,
+  canPasswordLock = false, canEmailShare = false,
 }: {
   handle: string
   folder: Folder
   filesInFolder: Upload[]
   inboxFiles: Upload[]
+  canPasswordLock?: boolean
+  canEmailShare?: boolean
 }) {
   const router = useRouter()
+  const { t } = useI18n()
   const [folder, setFolder] = useState<Folder>(initial)
   const [filesInFolder, setFilesInFolder] = useState<Upload[]>(initialIn)
   const [inboxFiles, setInboxFiles] = useState<Upload[]>(initialInbox)
@@ -62,6 +75,13 @@ export default function FolderEditor({
   const [adding, setAdding] = useState<string | null>(null)
   const [showPicker, setShowPicker] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+
+  const [passwordInput, setPasswordInput] = useState('')
+  const [passwordSaving, setPasswordSaving] = useState(false)
+  const [accessList, setAccessList] = useState<AccessEntry[]>([])
+  const [accessEmail, setAccessEmail] = useState('')
+  const [accessLoading, setAccessLoading] = useState(false)
+  const [accessLoaded, setAccessLoaded] = useState(false)
 
   const isInbox = !!folder.is_inbox
 
@@ -117,6 +137,71 @@ export default function FolderEditor({
   const deleteFolder = async () => {
     const res = await fetch(`/api/me/folders/${folder.id}`, { method: 'DELETE' })
     if (res.ok) router.push('/me')
+  }
+
+  const setPassword = async (password: string | null) => {
+    setPasswordSaving(true)
+    try {
+      const res = await fetch(`/api/me/folders/${folder.id}/password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      const data = await res.json()
+      if (res.ok && data.folder) {
+        setFolder(data.folder)
+        setPasswordInput('')
+      } else if (data.error === 'upgrade_required') {
+        setError(t('privacy.upgrade_needed'))
+      }
+    } finally { setPasswordSaving(false) }
+  }
+
+  const loadAccessList = async () => {
+    if (accessLoaded) return
+    setAccessLoading(true)
+    try {
+      const res = await fetch(`/api/me/folders/${folder.id}/access`)
+      const data = await res.json()
+      setAccessList(data.access || [])
+      setAccessLoaded(true)
+    } finally { setAccessLoading(false) }
+  }
+
+  const addAccess = async () => {
+    if (!accessEmail.includes('@')) return
+    setAccessLoading(true)
+    try {
+      const res = await fetch(`/api/me/folders/${folder.id}/access`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: accessEmail }),
+      })
+      const data = await res.json()
+      if (res.ok) {
+        setAccessList(data.access || [])
+        setAccessEmail('')
+        setFolder(prev => ({
+          ...prev,
+          access_mode: prev.has_password ? 'password_email' : 'email',
+        }))
+      } else if (data.error === 'upgrade_required') {
+        setError(t('privacy.upgrade_needed'))
+      }
+    } finally { setAccessLoading(false) }
+  }
+
+  const removeAccess = async (email: string) => {
+    setAccessLoading(true)
+    try {
+      const res = await fetch(`/api/me/folders/${folder.id}/access`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      })
+      const data = await res.json()
+      if (res.ok) setAccessList(data.access || [])
+    } finally { setAccessLoading(false) }
   }
 
   return (
@@ -238,6 +323,110 @@ export default function FolderEditor({
               {saving ? <Loader2 className="w-3 h-3 animate-spin" /> : <Save className="w-3 h-3" />}
               Save
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Privacy controls */}
+      {!isInbox && (
+        <div className="bg-gray-950 border border-gray-800 p-5 mb-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Shield className="w-4 h-4 text-gray-500" />
+            <h2 className="text-gray-500 text-xs">{t('privacy.title')}</h2>
+          </div>
+
+          {/* Password lock */}
+          <div className="mb-5">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <KeyRound className="w-3.5 h-3.5 text-gray-500" />
+                <span className="text-white text-sm">{t('privacy.password_lock')}</span>
+              </div>
+              {folder.has_password && (
+                <button
+                  onClick={() => setPassword(null)}
+                  disabled={passwordSaving}
+                  className="text-red-400 hover:text-red-300 text-xs"
+                >
+                  {t('privacy.remove_password')}
+                </button>
+              )}
+            </div>
+            {!canPasswordLock ? (
+              <p className="text-gray-600 text-xs">
+                {t('privacy.password_upgrade')} <a href="/pricing" className="text-accent-cyan hover:text-white">{t('privacy.see_plans')}</a>
+              </p>
+            ) : folder.has_password ? (
+              <p className="text-green-400/70 text-xs flex items-center gap-1">
+                <Lock className="w-3 h-3" /> {t('privacy.password_active')}
+              </p>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={passwordInput}
+                  onChange={(e) => setPasswordInput(e.target.value)}
+                  placeholder={t('privacy.password_placeholder')}
+                  className="flex-1 bg-black border border-gray-800 text-white px-3 py-1.5 text-sm focus:outline-none focus:border-gray-600"
+                />
+                <button
+                  onClick={() => passwordInput && setPassword(passwordInput)}
+                  disabled={!passwordInput || passwordSaving}
+                  className="bg-white hover:bg-gray-200 text-black px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                >
+                  {passwordSaving ? <Loader2 className="w-3 h-3 animate-spin" /> : t('privacy.set_password')}
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Email sharing */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <Mail className="w-3.5 h-3.5 text-gray-500" />
+              <span className="text-white text-sm">{t('privacy.email_access')}</span>
+            </div>
+            {!canEmailShare ? (
+              <p className="text-gray-600 text-xs">
+                {t('privacy.email_upgrade')} <a href="/pricing" className="text-accent-cyan hover:text-white">{t('privacy.see_plans')}</a>
+              </p>
+            ) : (
+              <>
+                <p className="text-gray-600 text-xs mb-3">{t('privacy.email_help')}</p>
+                <div className="flex gap-2 mb-3">
+                  <input
+                    type="email"
+                    value={accessEmail}
+                    onChange={(e) => setAccessEmail(e.target.value)}
+                    placeholder="viewer@example.com"
+                    onFocus={loadAccessList}
+                    className="flex-1 bg-black border border-gray-800 text-white px-3 py-1.5 text-sm focus:outline-none focus:border-gray-600"
+                  />
+                  <button
+                    onClick={addAccess}
+                    disabled={!accessEmail.includes('@') || accessLoading}
+                    className="bg-white hover:bg-gray-200 text-black px-3 py-1.5 text-xs font-medium disabled:opacity-50"
+                  >
+                    {accessLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : t('privacy.add_email')}
+                  </button>
+                </div>
+                {accessList.length > 0 && (
+                  <div className="space-y-1">
+                    {accessList.map((a) => (
+                      <div key={a.email} className="flex items-center justify-between py-1.5 px-2 bg-gray-900/50 text-sm">
+                        <span className="text-gray-300 font-mono text-xs">{a.email}</span>
+                        <button
+                          onClick={() => removeAccess(a.email)}
+                          className="text-gray-600 hover:text-red-400 text-xs"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}

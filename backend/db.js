@@ -327,6 +327,32 @@ if (currentVersion < 8) {
   console.log('✅ Database migrated to v8 (daily_upload_limit on plans)');
 }
 
+if (currentVersion < 9) {
+  db.exec(`
+    ALTER TABLE folders ADD COLUMN password_hash TEXT;
+    ALTER TABLE folders ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'open'
+      CHECK (access_mode IN ('open','password','email','password_email'));
+
+    CREATE TABLE folder_access (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      folder_id INTEGER NOT NULL,
+      email TEXT NOT NULL COLLATE NOCASE,
+      granted_by TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT (datetime('now')),
+      UNIQUE(folder_id, email),
+      FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE CASCADE,
+      FOREIGN KEY (granted_by) REFERENCES users(id)
+    );
+    CREATE INDEX idx_folder_access_folder ON folder_access(folder_id);
+    CREATE INDEX idx_folder_access_email ON folder_access(email);
+
+    UPDATE plans SET features_json = json_set(features_json, '$.password_lock', 0, '$.email_sharing', 0) WHERE slug = 'drift';
+    UPDATE plans SET features_json = json_set(features_json, '$.password_lock', 1, '$.email_sharing', 1) WHERE slug IN ('signal','beacon','archive');
+  `);
+  db.pragma('user_version = 9');
+  console.log('✅ Database migrated to v9 (folder privacy: password + email access)');
+}
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -955,6 +981,89 @@ function updateUserUpload(userId, uuid, patch) {
 }
 
 // =====================================================
+// FOLDER PRIVACY — password + email access
+// =====================================================
+
+function hashFolderPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(password, salt, 32).toString('hex');
+  return `${salt}:${hash}`;
+}
+
+function verifyFolderPassword(password, stored) {
+  if (!stored) return false;
+  const [salt, hash] = stored.split(':');
+  if (!salt || !hash) return false;
+  const test = crypto.scryptSync(password, salt, 32).toString('hex');
+  return test === hash;
+}
+
+function setFolderPassword(userId, folderId, password) {
+  const folder = _getFolderById.get(folderId);
+  if (!folder || folder.user_id !== userId) return null;
+  const hash = password ? hashFolderPassword(password) : null;
+  const newMode = password
+    ? (folder.access_mode === 'email' ? 'password_email' : 'password')
+    : (folder.access_mode === 'password_email' ? 'email' : 'open');
+  db.prepare('UPDATE folders SET password_hash = ?, access_mode = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(hash, newMode, folderId);
+  return getFolderById(folderId);
+}
+
+function setFolderAccessMode(userId, folderId, mode) {
+  const folder = _getFolderById.get(folderId);
+  if (!folder || folder.user_id !== userId) return null;
+  db.prepare('UPDATE folders SET access_mode = ?, updated_at = datetime(\'now\') WHERE id = ?')
+    .run(mode, folderId);
+  return getFolderById(folderId);
+}
+
+function addFolderAccess(userId, folderId, email) {
+  const folder = _getFolderById.get(folderId);
+  if (!folder || folder.user_id !== userId) return { ok: false, reason: 'not_owner' };
+  try {
+    db.prepare('INSERT OR IGNORE INTO folder_access (folder_id, email, granted_by) VALUES (?, ?, ?)')
+      .run(folderId, email.toLowerCase().trim(), userId);
+    const newMode = folder.password_hash
+      ? 'password_email'
+      : 'email';
+    if (folder.access_mode === 'open' || folder.access_mode === 'password') {
+      db.prepare('UPDATE folders SET access_mode = ?, updated_at = datetime(\'now\') WHERE id = ?')
+        .run(newMode, folderId);
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: 'db_error' };
+  }
+}
+
+function removeFolderAccess(userId, folderId, email) {
+  const folder = _getFolderById.get(folderId);
+  if (!folder || folder.user_id !== userId) return { ok: false, reason: 'not_owner' };
+  db.prepare('DELETE FROM folder_access WHERE folder_id = ? AND email = ?')
+    .run(folderId, email.toLowerCase().trim());
+  const remaining = db.prepare('SELECT COUNT(*) AS c FROM folder_access WHERE folder_id = ?').get(folderId);
+  if (remaining.c === 0) {
+    const newMode = folder.password_hash ? 'password' : 'open';
+    db.prepare('UPDATE folders SET access_mode = ?, updated_at = datetime(\'now\') WHERE id = ?')
+      .run(newMode, folderId);
+  }
+  return { ok: true };
+}
+
+function getFolderAccessList(folderId) {
+  return db.prepare('SELECT email, created_at FROM folder_access WHERE folder_id = ? ORDER BY created_at ASC')
+    .all(folderId);
+}
+
+function checkFolderAccess(folderId, viewerEmail) {
+  if (!viewerEmail) return false;
+  const row = db.prepare('SELECT 1 FROM folder_access WHERE folder_id = ? AND email = ?')
+    .get(folderId, viewerEmail.toLowerCase().trim());
+  return !!row;
+}
+
+// =====================================================
 // TAGS
 // =====================================================
 const _insertTag = db.prepare(`
@@ -1354,6 +1463,9 @@ module.exports = {
   addUploadToFolder, removeUploadFromFolder,
   getUploadsInFolder, getInboxUploadsForUser, getFoldersForUpload,
   updateUserUpload,
+  // folder privacy
+  setFolderPassword, verifyFolderPassword, setFolderAccessMode,
+  addFolderAccess, removeFolderAccess, getFolderAccessList, checkFolderAccess,
   // tags
   createTag, getTagsForUser,
   // plans

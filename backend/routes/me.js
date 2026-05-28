@@ -13,6 +13,9 @@ const {
   getUploadById, updateUserUpload,
   createTag, getTagsForUser,
   getInboxFolder,
+  setFolderPassword, setFolderAccessMode,
+  addFolderAccess, removeFolderAccess, getFolderAccessList,
+  getActiveUserPlan,
 } = require('../db');
 const { requireAdminSecret } = require('../middleware/apiAuth');
 
@@ -124,6 +127,67 @@ router.patch('/uploads/:uuid', (req, res) => {
   const { user_id, ...patch } = req.body || {};
   const updated = updateUserUpload(userId, upload.uuid, patch);
   res.json({ upload: updated });
+});
+
+// =====================================================
+// FOLDER PRIVACY
+// =====================================================
+function requireFeature(userId, feature) {
+  const plan = getActiveUserPlan(userId);
+  if (!plan) return false;
+  try {
+    const f = JSON.parse(plan.features_json || '{}');
+    return !!f[feature];
+  } catch { return false; }
+}
+
+// POST /folders/:id/password  { password: string | null }
+router.post('/folders/:id/password', (req, res) => {
+  const folder = getFolderById(parseInt(req.params.id));
+  if (!assertOwner(req, res, folder)) return;
+  const userId = uid(req);
+  if (!requireFeature(userId, 'password_lock')) {
+    return res.status(403).json({ error: 'upgrade_required', feature: 'password_lock' });
+  }
+  const { password } = req.body || {};
+  const updated = setFolderPassword(userId, folder.id, password || null);
+  res.json({ folder: updated });
+});
+
+// GET /folders/:id/access — list email access
+router.get('/folders/:id/access', (req, res) => {
+  const folder = getFolderById(parseInt(req.params.id));
+  if (!assertOwner(req, res, folder)) return;
+  res.json({ access: getFolderAccessList(folder.id) });
+});
+
+// POST /folders/:id/access  { email }
+router.post('/folders/:id/access', (req, res) => {
+  const folder = getFolderById(parseInt(req.params.id));
+  if (!assertOwner(req, res, folder)) return;
+  const userId = uid(req);
+  if (!requireFeature(userId, 'email_sharing')) {
+    return res.status(403).json({ error: 'upgrade_required', feature: 'email_sharing' });
+  }
+  const { email } = req.body || {};
+  if (!email || !email.includes('@')) {
+    return res.status(400).json({ error: 'valid_email_required' });
+  }
+  const result = addFolderAccess(userId, folder.id, email);
+  if (!result.ok) return res.status(400).json(result);
+  res.json({ ok: true, access: getFolderAccessList(folder.id) });
+});
+
+// DELETE /folders/:id/access  { email }
+router.delete('/folders/:id/access', (req, res) => {
+  const folder = getFolderById(parseInt(req.params.id));
+  if (!assertOwner(req, res, folder)) return;
+  const userId = uid(req);
+  const { email } = req.body || {};
+  if (!email) return res.status(400).json({ error: 'email_required' });
+  const result = removeFolderAccess(userId, folder.id, email);
+  if (!result.ok) return res.status(400).json(result);
+  res.json({ ok: true, access: getFolderAccessList(folder.id) });
 });
 
 // =====================================================

@@ -3,11 +3,17 @@
  *
  * v1: grid layout, dark theme, accent color from the folder's setting
  * (or owner default). Theme/FX/font customizations land in v2.
+ *
+ * Supports access_mode: open | password | email | password_email.
+ * On 403, renders a gate UI (password form / sign-in prompt).
  */
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import { backendJson } from '@/app/lib/backend'
+import { getSessionUser } from '@/app/lib/auth'
+import { getServerT } from '@/app/lib/i18n/server'
+import FolderAccessGate from '@/app/components/FolderAccessGate'
 
 interface PublicUser {
   handle: string
@@ -23,6 +29,16 @@ interface PublicFolder {
   accent_color: string | null
   default_layout: 'grid' | 'list' | 'timeline'
   banner_uuid: string | null
+  access_mode?: string
+  has_password?: boolean
+}
+
+interface AccessDeniedResp {
+  error: 'access_denied'
+  access_mode: string
+  reason: string
+  folder: PublicFolder
+  user: PublicUser
 }
 
 interface PublicUpload {
@@ -68,12 +84,54 @@ function formatBytes(b: number) {
   return (b / Math.pow(k, i)).toFixed(1) + sizes[i]
 }
 
-export default async function PublicFolderPage({ params }: { params: Promise<{ handle: string; slug: string }> }) {
+export default async function PublicFolderPage({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ handle: string; slug: string }>
+  searchParams: Promise<Record<string, string | undefined>>
+}) {
   const { handle, slug } = await params
+  const sp = await searchParams
+  const { t } = await getServerT(null)
+
+  const sessionUser = await getSessionUser()
+  const viewerEmail = sessionUser?.email || ''
+
+  const query = new URLSearchParams()
+  if (sp.password) query.set('password', sp.password)
+  if (viewerEmail) query.set('viewer_email', viewerEmail)
+  const qs = query.toString() ? `?${query.toString()}` : ''
+
   const res = await backendJson<{ user: PublicUser; folder: PublicFolder; uploads: PublicUpload[] }>(
-    `/api/v1/u/${handle}/f/${slug}`,
-    { next: { revalidate: 60 } }
+    `/api/v1/u/${handle}/f/${slug}${qs}`,
+    { cache: 'no-store' }
   )
+
+  if (res.status === 403) {
+    const denied = res.data as unknown as AccessDeniedResp
+    return (
+      <div className="min-h-screen bg-black">
+        <header className="container mx-auto px-4 py-6">
+          <Link href={`/u/${handle}`} className="flex items-center gap-2 text-gray-500 hover:text-white text-sm w-fit">
+            <ArrowLeft className="w-3.5 h-3.5" />
+            @{handle}
+          </Link>
+        </header>
+        <main className="container mx-auto px-4 py-16 max-w-md">
+          <FolderAccessGate
+            folderName={denied?.folder?.name || slug}
+            accessMode={denied?.access_mode || 'password'}
+            reason={denied?.reason || 'password'}
+            handle={handle}
+            slug={slug}
+            isLoggedIn={!!sessionUser}
+          />
+        </main>
+      </div>
+    )
+  }
+
   if (!res.ok || !res.data) notFound()
   const { user, folder, uploads } = res.data
 

@@ -70,6 +70,8 @@ export default async function PricingPage() {
     bulk: t('pricing.feat_bulk'),
     analytics: t('pricing.feat_analytics'),
     lifetime: t('pricing.feat_lifetime'),
+    password_lock: t('pricing.feat_password_lock'),
+    email_sharing: t('pricing.feat_email_sharing'),
   }
 
   return (
