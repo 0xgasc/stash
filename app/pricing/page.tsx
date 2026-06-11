@@ -173,13 +173,11 @@ export default async function PricingPage() {
                 </ul>
 
                 <Link
-                  href={plan.price_cents === 0 ? '/auth' : '/auth'}
+                  href={plan.price_cents === 0 ? '/auth' : `/checkout/${plan.slug}`}
                   className={`block text-center font-bold py-2.5 px-4 text-sm uppercase tracking-wider transition-colors ${
                     isPopular
                       ? 'bg-white hover:bg-gray-200 text-black'
-                      : plan.price_cents === 0
-                        ? 'bg-gray-900 hover:bg-gray-800 text-white border border-gray-700'
-                        : 'bg-gray-900 hover:bg-gray-800 text-white border border-gray-700'
+                      : 'bg-gray-900 hover:bg-gray-800 text-white border border-gray-700'
                   }`}
                 >
                   {plan.price_cents === 0 ? t('pricing.cta_free') : t('pricing.cta_paid')}

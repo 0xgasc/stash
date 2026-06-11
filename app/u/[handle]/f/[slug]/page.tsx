@@ -9,6 +9,7 @@
  */
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { cookies } from 'next/headers'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
 import { backendJson } from '@/app/lib/backend'
 import { getSessionUser } from '@/app/lib/auth'
@@ -86,26 +87,24 @@ function formatBytes(b: number) {
 
 export default async function PublicFolderPage({
   params,
-  searchParams,
 }: {
   params: Promise<{ handle: string; slug: string }>
-  searchParams: Promise<Record<string, string | undefined>>
 }) {
   const { handle, slug } = await params
-  const sp = await searchParams
   const { t } = await getServerT(null)
 
   const sessionUser = await getSessionUser()
+  const cookieStore = await cookies()
+  const folderPassword = cookieStore.get(`stash_fpw_${handle}_${slug}`)?.value || ''
   const viewerEmail = sessionUser?.email || ''
 
-  const query = new URLSearchParams()
-  if (sp.password) query.set('password', sp.password)
-  if (viewerEmail) query.set('viewer_email', viewerEmail)
-  const qs = query.toString() ? `?${query.toString()}` : ''
+  const headers: Record<string, string> = {}
+  if (folderPassword) headers['X-Folder-Password'] = folderPassword
+  if (viewerEmail) headers['X-Viewer-Email'] = viewerEmail
 
   const res = await backendJson<{ user: PublicUser; folder: PublicFolder; uploads: PublicUpload[] }>(
-    `/api/v1/u/${handle}/f/${slug}${qs}`,
-    { cache: 'no-store' }
+    `/api/v1/u/${handle}/f/${slug}`,
+    { cache: 'no-store', headers }
   )
 
   if (res.status === 403) {

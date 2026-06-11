@@ -256,22 +256,22 @@ export default function HomeUploadHero() {
     setUploading(false)
   }
 
-  const handleDrop = useCallback((e: React.DragEvent) => {
+  const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
     const file = e.dataTransfer.files[0]
     if (file) handleUpload(file)
-  }, [uploadLimit])
+  }
 
-  const handleDragOver = useCallback((e: React.DragEvent) => {
+  const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(true)
-  }, [])
+  }
 
-  const handleDragLeave = useCallback((e: React.DragEvent) => {
+  const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
-  }, [])
+  }
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]

@@ -41,12 +41,12 @@ function checkAccess(folder, req) {
   let emailOk = !needsEmail;
 
   if (needsPassword) {
-    const pw = req.query.password || req.headers['x-folder-password'] || '';
+    const pw = req.headers['x-folder-password'] || '';
     passwordOk = verifyFolderPassword(pw, folder.password_hash);
   }
 
   if (needsEmail) {
-    const viewerEmail = req.query.viewer_email || req.headers['x-viewer-email'] || '';
+    const viewerEmail = req.headers['x-viewer-email'] || '';
     emailOk = viewerEmail ? checkFolderAccess(folder.id, viewerEmail) : false;
   }
 

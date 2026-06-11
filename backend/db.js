@@ -353,6 +353,16 @@ if (currentVersion < 9) {
   console.log('✅ Database migrated to v9 (folder privacy: password + email access)');
 }
 
+if (currentVersion < 10) {
+  db.exec(`
+    UPDATE plans SET stripe_price_id = 'price_1TcDz86HdcJkNlot1qbeTpOq' WHERE slug = 'signal';
+    UPDATE plans SET stripe_price_id = 'price_1TcDzp6HdcJkNlotahMVE1oY' WHERE slug = 'beacon';
+    UPDATE plans SET stripe_price_id = 'price_1TcE0S6HdcJkNlotlWfcqTD2' WHERE slug = 'archive';
+  `);
+  db.pragma('user_version = 10');
+  console.log('✅ Database migrated to v10 (Stripe price IDs)');
+}
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -1396,7 +1406,12 @@ function getActiveUserPlan(userId) {
     WHERE up.user_id = ? AND up.status IN ('active','pending')
     ORDER BY up.created_at DESC LIMIT 1
   `).get(userId);
-  return row || null;
+  if (!row) return null;
+  if (row.ends_at && new Date(row.ends_at + 'Z') < new Date()) {
+    db.prepare("UPDATE user_plans SET status = 'expired', updated_at = datetime('now') WHERE id = ?").run(row.id);
+    return null;
+  }
+  return row;
 }
 
 function getUserPlanHistory(userId, { limit = 20 } = {}) {

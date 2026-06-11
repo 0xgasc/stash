@@ -25,16 +25,26 @@ export default function FolderAccessGate({
   const needsPassword = reason === 'password' || reason === 'password_email'
   const needsEmail = reason === 'email' || reason === 'password_email'
 
-  const tryPassword = () => {
+  const tryPassword = async () => {
     if (!password) return
     setSubmitting(true)
     setWrongPassword(false)
-    const url = `/u/${handle}/f/${slug}?password=${encodeURIComponent(password)}`
-    router.push(url)
-    setTimeout(() => {
-      setSubmitting(false)
+    try {
+      const res = await fetch(`/api/u/${handle}/f/${slug}/unlock`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      if (res.ok) {
+        router.refresh()
+      } else {
+        setWrongPassword(true)
+      }
+    } catch {
       setWrongPassword(true)
-    }, 2000)
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (

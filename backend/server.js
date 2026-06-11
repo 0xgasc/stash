@@ -158,6 +158,8 @@ app.use('/api/v1/users', require('./routes/users'));
 app.use('/api/v1/me', require('./routes/me'));
 app.use('/api/v1/u', require('./routes/public'));
 app.use('/api/v1/admin', require('./routes/admin'));
+app.use('/api/v1/checkout', require('./routes/checkout'));
+app.use('/api/v1/webhook', require('./routes/webhooks'));
 
 // Rate limiting
 const uploadLimiter = rateLimit({
