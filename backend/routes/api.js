@@ -134,6 +134,16 @@ router.get('/uploads', requireAuth, (req, res) => {
 });
 
 // =====================================================
+// GET /uploads/expiring — Closest to refresh deadline (admin)
+// MUST be defined before /uploads/:uuid or Express matches
+// "expiring" as a uuid and this route is unreachable.
+// =====================================================
+router.get('/uploads/expiring', requireAuth, (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
+  res.json({ uploads: getExpiringUploads({ limit }) });
+});
+
+// =====================================================
 // GET /uploads/:uuid — Single upload detail
 // =====================================================
 router.get('/uploads/:uuid', requireAuth, (req, res) => {
@@ -212,14 +222,6 @@ router.post('/reupload/:token', reuploadLimiter, upload.single('file'), async (r
 router.get('/stats', requireAuth, (req, res) => {
   const stats = getStats();
   res.json(stats);
-});
-
-// =====================================================
-// GET /uploads/expiring — Closest to refresh deadline (admin)
-// =====================================================
-router.get('/uploads/expiring', requireAuth, (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit) || 20, 100);
-  res.json({ uploads: getExpiringUploads({ limit }) });
 });
 
 // =====================================================
