@@ -29,7 +29,7 @@ GitHub: https://github.com/0xgasc/stash.git
 
 ## Database
 
-SQLite on Railway volume. Migrations are auto-applied on startup in `backend/db.js`.
+SQLite on Railway volume. Migrations are auto-applied on startup in `backend/db.js` — each one runs inside a transaction (mid-migration failure rolls back cleanly), and a file-copy backup of the DB is taken into `<data>/backups/` (last 5 kept) before any pending migration runs.
 
 | Version | What |
 |---|---|
@@ -39,7 +39,8 @@ SQLite on Railway volume. Migrations are auto-applied on startup in `backend/db.
 | v7 | User email, preferred_locale, handle_changed_at |
 | v8 | daily_upload_limit on plans (Drift = 3/day) |
 | v9 | Folder privacy: password_hash, access_mode, folder_access table, feature gating |
-| v10 | Stripe price IDs on plans |
+| v10 | Stripe price IDs on plans (live-mode IDs — fresh dev DBs need test-mode ones via admin panel) |
+| v11 | Payment idempotency: unique index on (payment_provider, payment_reference); users.email index |
 
 ### Key tables
 
@@ -102,11 +103,17 @@ All Express routes are in `backend/routes/`:
 
 1. User visits `/pricing` → clicks paid plan CTA → `/checkout/[slug]` (requires login)
 2. Picks payment method:
-   - **Stripe**: Creates Checkout Session → redirect to Stripe → webhook confirms → `assignPlan()`
-   - **Recurrente**: Redirects to Recurrente checkout URL with metadata → webhook confirms
-   - **StablePay**: Widget renders inline → user pays USDC on-chain → client confirms → `assignPlan()`
-3. Webhook/confirmation calls `assignPlan()` → sets `ends_at` based on billing period
+   - **Stripe**: Creates Checkout Session → redirect to Stripe → webhook activates
+   - **Recurrente**: Redirects to Recurrente checkout URL → webhook activates (or alerts for manual activation if metadata doesn't round-trip)
+   - **StablePay**: Widget renders inline → user pays USDC on-chain → client confirm records a **pending** row only → the signature-verified StablePay webhook (or admin) activates
+3. Activation calls `activatePendingPlan()`/`assignPlan()` → sets `ends_at` from billing period
 4. User lands on `/checkout/success`
+
+**Trust model (critical, do not regress):**
+- The client NEVER activates a plan. `stablepay-confirm` writes `status:'pending', payment_status:'unpaid'` and emails an operator alert; only verified webhooks or an admin grant flip it to active.
+- `getActiveUserPlan()` only honors `status = 'active'` — pending rows grant no features/quotas, and rows past `ends_at` are auto-expired on read.
+- Webhooks **fail closed**: if the provider's signing secret env var is unset they return 501 + alert email. Recurrente/StablePay HMACs are verified over the RAW body bytes (`express.raw`), never over re-serialized JSON.
+- Duplicate webhook deliveries are idempotent via the unique `(payment_provider, payment_reference)` index.
 
 ### Plan feature gating
 
@@ -152,11 +159,17 @@ Own magic-link system (not Supabase):
 
 ## Onboarding Funnel
 
-1. Anonymous: 1 free upload (tracked via HMAC-signed cookie), then sign-up prompt
+1. Anonymous: 1 free upload (HMAC cookie, UX-only) — the authoritative backstop is the backend's per-IP cap (`ANON_DAILY_IP_LIMIT`, default 3/day)
 2. Free account (Drift): 3 uploads/day, 10/month, organize in folders
 3. Paid tiers: higher limits + premium features (password lock, email sharing, etc.)
 
-Upload limits enforced both client-side (pre-check) and server-side (backend rejects).
+Quotas are enforced **in the backend** at `/tus-upload/complete` via `utils/quota.js` (plan daily/monthly/total limits for users, IP/day for anonymous). The Next.js cookie checks are advisory UX only.
+
+## Stable links & durable originals
+
+- **`/f/:uuid`** (both on the backend and at `stash.offsetworks.xyz/f/<uuid>`) 302s to the upload's *current* gateway URL. The re-upload cron rewrites `uploads.irys_url` in place, so this URL survives every devnet refresh cycle. Consumers (e.g. KOH) should store this instead of raw gateway URLs. Deliberately 302 + `Cache-Control: no-store` — a 301 would be cached and recreate dead links.
+- **Originals** are preserved on the Railway volume at `<data>/originals/<uuid>` when uploads complete; the re-upload cron prefers the local copy and only falls back to gateway fetch for legacy files. This removes the "devnet evicted before the cron ran → file lost forever" failure mode.
+- Abandoned TUS uploads (no `/complete` within 24h) are swept hourly from memory and tmpdir.
 
 ## i18n
 
@@ -198,7 +211,12 @@ cd backend && npm install && node server.js
 # Frontend
 npm install && npm run dev
 # → http://localhost:3000
+
+# Tests (backend money paths: plans, webhooks, quotas, sanitizers)
+cd backend && npm test
 ```
+
+CI (`.github/workflows/ci.yml`) runs frontend `tsc --noEmit` + backend tests on every push/PR. Railway deploy config lives in `backend/railway.json` (the service's root directory is `/backend`).
 
 ## Deployment
 
@@ -214,7 +232,9 @@ git add -A && git commit -m "..." && git push origin main
 
 - [ ] Add CNAME `stash` → `cname.vercel-dns.com` at DNS for offsetworks.xyz
 - [ ] Add `stash.offsetworks.xyz` as custom domain in Vercel project settings
-- [ ] Rotate Stripe secret key (leaked in chat 2026-05-28), set new one on Railway
+- [ ] Rotate Stripe secret key (leaked in chat 2026-05-28), then `railway variables set STRIPE_SECRET_KEY=...`
 - [ ] Rotate Recurrente keys (leaked in chat 2026-05-28)
-- [ ] Set up Recurrente products + webhook + paste checkout URLs in admin panel
-- [ ] Test full payment flow end-to-end (Stripe → webhook → plan activation)
+- [ ] Set `STABLEPAY_WEBHOOK_SECRET` on Railway + register the webhook in WeTakeStables (crypto payments stay pending without it)
+- [ ] Set up Recurrente products + webhook (`RECURRENTE_SECRET_KEY`) + paste checkout URLs in admin panel
+- [ ] Test full payment flow end-to-end (Stripe test mode → webhook → plan activation)
+- [ ] Migrate KOH's 67 stored gateway URLs to `stash.offsetworks.xyz/f/<uuid>` (map old URL → uuid via `upload_links`)

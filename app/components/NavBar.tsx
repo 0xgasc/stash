@@ -31,7 +31,7 @@ export default function NavBar() {
             Pricing
           </Link>
           {user ? (
-            <Link href="/dashboard" className="text-gray-500 hover:text-accent-cyan transition-colors">
+            <Link href="/me" className="text-gray-500 hover:text-accent-cyan transition-colors">
               Dashboard
             </Link>
           ) : isConfigured ? (

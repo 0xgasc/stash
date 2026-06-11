@@ -12,6 +12,7 @@ import { Resend } from 'resend'
 import { createMagicLinkToken } from '@/app/lib/user-auth'
 import { getServerT } from '@/app/lib/i18n/server'
 import { backendJson } from '@/app/lib/backend'
+import { rateLimit, clientIp } from '@/app/lib/rate-limit'
 
 const RESEND_API_KEY = process.env.RESEND_API_KEY
 const ALERT_FROM = process.env.ALERT_FROM || 'alerts@offsetworks.xyz'
@@ -19,6 +20,11 @@ const APP_URL = process.env.NEXT_PUBLIC_APP_URL || 'https://aeter-eight.vercel.a
 const resend = RESEND_API_KEY ? new Resend(RESEND_API_KEY) : null
 
 export async function POST(req: NextRequest) {
+  // 5 sign-in emails / 15 min per IP — bounds email spam + Resend quota burn
+  if (!rateLimit(`auth-req:${clientIp(req)}`, 5, 15 * 60 * 1000)) {
+    return NextResponse.json({ error: 'Too many requests. Try again in a few minutes.' }, { status: 429 })
+  }
+
   const body = await req.json().catch(() => ({}))
   const email = String(body.email || '').trim().toLowerCase()
   const claimToken = body.claim_token ? String(body.claim_token) : null

@@ -47,7 +47,7 @@ const FEATURE_LABELS: Record<string, string> = {
 }
 
 export default async function CheckoutPage({ params }: { params: Promise<{ planSlug: string }> }) {
-  await requireUser()
+  const { stashUser } = await requireUser()
   const { planSlug } = await params
 
   let plan: Plan | null = null
@@ -130,6 +130,7 @@ export default async function CheckoutPage({ params }: { params: Promise<{ planS
               planSlug={plan.slug}
               planName={plan.name}
               priceDollars={(plan.price_cents / 100).toFixed(2)}
+              userId={stashUser.id}
               providers={providers}
             />
           ) : (

@@ -20,7 +20,7 @@ export default function CalculatorPage() {
             <Link href="/pricing" className="text-gray-400 hover:text-white">
               Pricing
             </Link>
-            <Link href="/dashboard" className="text-gray-400 hover:text-white">
+            <Link href="/me" className="text-gray-400 hover:text-white">
               Dashboard
             </Link>
             <Link href="/" className="bg-white hover:bg-gray-200 text-black px-4 py-2 font-medium">
@@ -94,7 +94,7 @@ export default function CalculatorPage() {
           <div>Arweave + Irys</div>
           <div className="flex gap-6">
             <Link href="/pricing" className="hover:text-gray-400">Pricing</Link>
-            <Link href="/dashboard" className="hover:text-gray-400">Dashboard</Link>
+            <Link href="/me" className="hover:text-gray-400">Dashboard</Link>
           </div>
         </div>
       </footer>

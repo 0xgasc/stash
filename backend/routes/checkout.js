@@ -96,7 +96,9 @@ router.post('/recurrente', (req, res) => {
 
 // POST /checkout/stablepay-confirm
 // Called after the StablePay widget fires payment.success on the client.
-// The widget handles the on-chain payment; we just activate the plan.
+// The client-reported event is NOT trusted: this only records a PENDING
+// assignment. Activation happens exclusively in the signature-verified
+// StablePay webhook (routes/webhooks.js), or manually via the admin panel.
 router.post('/stablepay-confirm', (req, res) => {
   const { user_id, plan_slug, payment } = req.body;
   if (!user_id || !plan_slug) {
@@ -111,23 +113,27 @@ router.post('/stablepay-confirm', (req, res) => {
 
   const ref = payment?.txHash || payment?.transactionHash || payment?.id || null;
   const { assignPlan } = require('../db');
-  const endsAt = plan.billing_period === 'one_time' ? null : (() => {
-    const d = new Date();
-    if (plan.billing_period === 'monthly') d.setMonth(d.getMonth() + 1);
-    else if (plan.billing_period === 'yearly') d.setFullYear(d.getFullYear() + 1);
-    return d.toISOString().replace('T', ' ').slice(0, 19);
-  })();
+  const { sendAlert } = require('../utils/alerts');
 
   assignPlan(user_id, {
     plan_id: plan.id,
-    status: 'active',
-    payment_status: 'paid',
+    status: 'pending',
+    payment_status: 'unpaid',
     payment_provider: 'stablepay',
     payment_reference: ref,
-    ends_at: endsAt,
+    notes: 'client-reported crypto payment; awaiting webhook confirmation',
   });
-  console.log(`✅ StablePay widget: activated ${plan.slug} for user ${user_id} (ref: ${ref})`);
-  res.json({ ok: true });
+  console.log(`⏳ StablePay widget: pending ${plan.slug} for user ${user_id} (ref: ${ref}) — awaiting webhook`);
+
+  sendAlert({
+    key: `stablepay-pending-${user_id}-${plan.slug}`,
+    subject: `[stash] Crypto payment pending verification — ${plan.name}`,
+    html: `<p>User <code>${user.email || user.handle || user_id}</code> reports a crypto payment for <b>${plan.name}</b> ($${(plan.price_cents / 100).toFixed(2)}).</p>
+<p>Tx ref: <code>${ref || 'none provided'}</code></p>
+<p>If the StablePay webhook doesn't auto-activate it, verify the tx and activate via admin → Users → assign plan.</p>`,
+  }).catch(() => {});
+
+  res.json({ ok: true, status: 'pending' });
 });
 
 module.exports = router;

@@ -11,7 +11,11 @@ const { findApiKeyByHash, updateApiKeyLastUsed } = require('../db');
 const ADMIN_BACKEND_SECRET = process.env.ADMIN_BACKEND_SECRET;
 
 function isValidAdminSecret(value) {
-  return ADMIN_BACKEND_SECRET && value === ADMIN_BACKEND_SECRET;
+  if (!ADMIN_BACKEND_SECRET || typeof value !== 'string') return false;
+  const a = Buffer.from(value, 'utf8');
+  const b = Buffer.from(ADMIN_BACKEND_SECRET, 'utf8');
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
 }
 
 /**

@@ -9,8 +9,17 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { uploadFileToIrysFromPath } = require('./irysUploader');
+const { getOriginalPath } = require('./originals');
 
 async function reuploadFromExisting(record) {
+  // Prefer the locally preserved original — it can't be evicted and
+  // costs no bandwidth. Gateway fetch is the legacy fallback for files
+  // uploaded before originals were preserved.
+  const localPath = getOriginalPath(record.uuid);
+  if (localPath) {
+    return uploadFileToIrysFromPath(localPath, record.filename);
+  }
+
   const urls = [record.irys_url, `https://arweave.net/${record.arweave_id}`];
 
   let buffer = null;

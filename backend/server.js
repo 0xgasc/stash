@@ -20,13 +20,16 @@ const os = require('os');
 const fs = require('fs');
 
 const { uploadFileToIrysFromPath } = require('./utils/irysUploader');
-const { insertUpload } = require('./db');
+const { insertUpload, getUploadById } = require('./db');
 const apiRoutes = require('./routes/api');
 const { getClientInfo } = require('./utils/clientInfo');
 const { scheduleGeoLookup } = require('./utils/geo');
 const { startReuploadCron } = require('./cron/reuploadStale');
 const { startAlertCron } = require('./cron/alerts');
 const { addUploadToFolder, getFolderById, getInboxFolder } = require('./db');
+const { isSafeTusId, sanitizeFilename } = require('./utils/sanitize');
+const { checkUploadQuota } = require('./utils/quota');
+const { preserveOriginal } = require('./utils/originals');
 
 const TRUSTED_HEADER = 'x-admin-secret';
 const ADMIN_BACKEND_SECRET = process.env.ADMIN_BACKEND_SECRET;
@@ -242,13 +245,25 @@ app.options('/tus-upload/complete', (req, res) => {
 
 app.post('/tus-upload/complete', async (req, res) => {
   try {
-    const { uploadId, originalFilename } = req.body;
+    const { uploadId } = req.body;
+
+    // uploadId is joined into a filesystem path below — reject anything
+    // outside a strict charset (path-traversal hardening).
+    if (!isSafeTusId(uploadId)) {
+      return res.status(400).json({ error: 'Invalid upload id' });
+    }
+    const originalFilename = sanitizeFilename(req.body.originalFilename);
+
+    // Authoritative quota check: plan limits for users, IP/day cap for anon.
+    const ctxEarly = trustedUserContext(req);
+    const clientIp = getClientInfo(req).ip_address;
+    const quota = checkUploadQuota(ctxEarly.user_id, clientIp);
+    if (!quota.ok) {
+      return res.status(429).json({ error: quota.error });
+    }
 
     console.log(`📤 Processing completed tus upload: ${uploadId}`);
     console.log(`   - Original filename: ${originalFilename}`);
-
-    // List all known completed uploads for debugging
-    console.log(`   - Known completed uploads: [${[...completedTusUploads.keys()].join(', ')}]`);
 
     const uploadInfo = completedTusUploads.get(uploadId);
     if (!uploadInfo) {
@@ -261,15 +276,6 @@ app.post('/tus-upload/complete', async (req, res) => {
         console.log('🚀 Uploading to Irys (from disk fallback)...');
         const result = await uploadFileToIrysFromPath(possiblePath, originalFilename);
         console.log(`✅ Irys upload complete: ${result.url}`);
-
-        // Cleanup
-        try {
-          fs.unlinkSync(possiblePath);
-          const metadataPath = possiblePath + '.json';
-          if (fs.existsSync(metadataPath)) fs.unlinkSync(metadataPath);
-        } catch (cleanupError) {
-          console.error('⚠️ Cleanup failed:', cleanupError.message);
-        }
 
         // Record in database (with optional user_id from trusted Next.js proxy)
         const ctx = trustedUserContext(req);
@@ -287,6 +293,14 @@ app.post('/tus-upload/complete', async (req, res) => {
         });
         scheduleGeoLookup(dbRecord.uuid, dbRecord.ip_address);
         associateAfterInsert(dbRecord.uuid, ctx.user_id, ctx.folder_id);
+
+        // Keep the original on the volume so future re-uploads never
+        // depend on a possibly-evicted gateway URL.
+        preserveOriginal(possiblePath, dbRecord.uuid);
+        try {
+          const metadataPath = possiblePath + '.json';
+          if (fs.existsSync(metadataPath)) fs.unlinkSync(metadataPath);
+        } catch { /* non-critical */ }
 
         return res.json({
           success: true,
@@ -329,18 +343,6 @@ app.post('/tus-upload/complete', async (req, res) => {
     const result = await uploadFileToIrysFromPath(uploadInfo.filePath, originalFilename);
     console.log(`✅ Irys upload complete: ${result.url}`);
 
-    // Cleanup temp files
-    try {
-      fs.unlinkSync(uploadInfo.filePath);
-      const metadataPath = uploadInfo.filePath + '.json';
-      if (fs.existsSync(metadataPath)) {
-        fs.unlinkSync(metadataPath);
-      }
-      console.log(`🧹 Cleaned up temp file: ${uploadInfo.filePath}`);
-    } catch (cleanupError) {
-      console.error('⚠️ Failed to cleanup temp file:', cleanupError);
-    }
-
     completedTusUploads.delete(uploadId);
 
     // Record in database (with optional user_id from trusted Next.js proxy)
@@ -360,6 +362,14 @@ app.post('/tus-upload/complete', async (req, res) => {
     scheduleGeoLookup(dbRecord.uuid, dbRecord.ip_address);
     associateAfterInsert(dbRecord.uuid, ctx.user_id, ctx.folder_id);
 
+    // Keep the original on the volume so future re-uploads never depend
+    // on a possibly-evicted gateway URL.
+    preserveOriginal(uploadInfo.filePath, dbRecord.uuid);
+    try {
+      const metadataPath = uploadInfo.filePath + '.json';
+      if (fs.existsSync(metadataPath)) fs.unlinkSync(metadataPath);
+    } catch { /* non-critical */ }
+
     res.json({
       success: true,
       url: result.url,
@@ -376,9 +386,25 @@ app.post('/tus-upload/complete', async (req, res) => {
     console.error('   Stack:', error.stack);
     res.status(500).json({
       error: 'Failed to process upload',
-      details: error.message,
+      ...(process.env.NODE_ENV !== 'production' ? { details: error.message } : {}),
     });
   }
+});
+
+// =====================================================
+// STABLE PUBLIC REDIRECT
+// /f/:uuid → 302 to the upload's CURRENT gateway URL.
+// The re-upload cron rewrites uploads.irys_url in place, so this URL
+// survives every refresh cycle. 302 + no-store on purpose: a 301 would
+// be cached permanently and recreate the dead-link problem.
+// =====================================================
+app.get('/f/:uuid', (req, res) => {
+  const { uuid } = req.params;
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).send('Invalid id');
+  const upload = getUploadById(uuid);
+  if (!upload || !upload.irys_url) return res.status(404).send('Not found');
+  res.set('Cache-Control', 'no-store');
+  res.redirect(302, upload.irys_url);
 });
 
 // =====================================================
@@ -390,6 +416,46 @@ app.get('/health', (req, res) => {
     tusDir: tusUploadDir,
     pendingUploads: completedTusUploads.size,
   });
+});
+
+// =====================================================
+// TEMP SWEEP — abandoned TUS uploads
+// Entries/files older than 24h whose /complete never arrived are
+// dropped so the in-memory map and tmpdir don't grow unboundedly.
+// =====================================================
+const SWEEP_AGE_MS = 24 * 60 * 60 * 1000;
+setInterval(() => {
+  const cutoff = Date.now() - SWEEP_AGE_MS;
+  let swept = 0;
+  for (const [id, info] of completedTusUploads) {
+    if (info.completedAt && info.completedAt.getTime() < cutoff) {
+      completedTusUploads.delete(id);
+      try { fs.unlinkSync(info.filePath); } catch {}
+      try { fs.unlinkSync(info.filePath + '.json'); } catch {}
+      swept++;
+    }
+  }
+  try {
+    for (const f of fs.readdirSync(tusUploadDir)) {
+      const p = path.join(tusUploadDir, f);
+      try {
+        if (fs.statSync(p).mtimeMs < cutoff) { fs.unlinkSync(p); swept++; }
+      } catch {}
+    }
+  } catch {}
+  if (swept > 0) console.log(`🧹 Swept ${swept} abandoned TUS artifact(s)`);
+}, 60 * 60 * 1000).unref();
+
+// =====================================================
+// CRASH SAFETY — log instead of dying on stray async errors
+// =====================================================
+process.on('unhandledRejection', (reason) => {
+  console.error('❌ Unhandled rejection:', reason);
+});
+process.on('uncaughtException', (err) => {
+  console.error('❌ Uncaught exception:', err);
+  // Exit on truly unknown state; Railway restarts the process.
+  process.exit(1);
 });
 
 // =====================================================

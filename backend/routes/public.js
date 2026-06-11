@@ -8,6 +8,7 @@
  *   - files in folder: respects file-level visibility != 'private'
  */
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const {
   getUserByHandle, getPublicFoldersForUser, getFolderBySlug,
   getUploadsInFolder, getUploadById, getFolderById, getUserById,
@@ -15,6 +16,21 @@ const {
 } = require('../db');
 
 const router = express.Router();
+
+// Password-attempt throttle. scryptSync blocks the event loop ~50ms per
+// guess, so unthrottled guessing is both a brute-force and a DoS vector.
+// Generous ceiling because legit traffic via the Vercel proxy shares
+// egress IPs — the strict per-client limit lives in the Next unlock route.
+const passwordAttemptLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000,
+  max: 60,
+  skip: (req) => !req.headers['x-folder-password'],
+  message: { error: 'too_many_password_attempts' },
+  standardHeaders: true,
+  legacyHeaders: false,
+  validate: { ip: false },
+});
+router.use(passwordAttemptLimiter);
 
 function stripUser(user) {
   if (!user) return null;

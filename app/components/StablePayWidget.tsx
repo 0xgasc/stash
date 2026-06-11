@@ -7,10 +7,14 @@ const MERCHANT_ID = 'cmn979jnf0000110ntpw8x6fi'
 export default function StablePayWidget({
   amount,
   product,
+  metadata,
   onSuccess,
 }: {
   amount: string
   product: string
+  /** Forwarded to the StablePay webhook so the backend can match the
+   *  payment to a user/plan without trusting the client. */
+  metadata?: Record<string, string>
   onSuccess: (detail: Record<string, unknown>) => void
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -39,6 +43,7 @@ export default function StablePayWidget({
       data-merchant={MERCHANT_ID}
       data-amount={amount}
       data-product={product}
+      data-metadata={metadata ? JSON.stringify(metadata) : undefined}
       data-theme="dark"
       data-accent="#7dd3c0"
     />

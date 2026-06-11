@@ -1,11 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { backendJson } from '@/app/lib/backend'
+import { rateLimit, clientIp } from '@/app/lib/rate-limit'
 
 export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ handle: string; slug: string }> }
 ) {
   const { handle, slug } = await params
+
+  // 5 attempts / 10 min per client IP per folder
+  if (!rateLimit(`unlock:${clientIp(req)}:${handle}/${slug}`, 5, 10 * 60 * 1000)) {
+    return NextResponse.json({ ok: false, error: 'too_many_attempts' }, { status: 429 })
+  }
+
   const body = await req.json().catch(() => ({}))
   const password = body.password || ''
 

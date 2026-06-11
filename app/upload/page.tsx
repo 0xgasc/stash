@@ -21,7 +21,7 @@ export default function UploadPage() {
             <Link href="/pricing" className="text-gray-400 hover:text-white">
               Pricing
             </Link>
-            <Link href="/dashboard" className="text-gray-400 hover:text-white">
+            <Link href="/me" className="text-gray-400 hover:text-white">
               Dashboard
             </Link>
           </div>

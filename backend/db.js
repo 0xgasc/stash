@@ -29,8 +29,39 @@ db.pragma('foreign_keys = ON');
 // MIGRATIONS
 // =====================================================
 const currentVersion = db.pragma('user_version', { simple: true });
+const LATEST_VERSION = 11;
 
-if (currentVersion < 1) {
+// File-copy backup before any pending migration touches an existing DB.
+// Kept under <data>/backups, last 5 retained.
+if (currentVersion > 0 && currentVersion < LATEST_VERSION) {
+  try {
+    db.pragma('wal_checkpoint(TRUNCATE)');
+    const backupDir = path.join(path.dirname(DB_PATH), 'backups');
+    fs.mkdirSync(backupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const dest = path.join(backupDir, `stash-v${currentVersion}-${stamp}.db`);
+    fs.copyFileSync(DB_PATH, dest);
+    const old = fs.readdirSync(backupDir).filter((f) => f.endsWith('.db')).sort();
+    while (old.length > 5) fs.unlinkSync(path.join(backupDir, old.shift()));
+    console.log(`🗄  Pre-migration backup: ${dest}`);
+  } catch (err) {
+    console.error('⚠️ Pre-migration backup failed:', err.message);
+  }
+}
+
+// Each migration runs inside a transaction (SQLite DDL is transactional),
+// so a mid-migration failure rolls back cleanly instead of leaving a
+// half-applied schema that re-throws on every subsequent boot.
+function migrate(version, message, fn) {
+  if (currentVersion >= version) return;
+  db.transaction(() => {
+    fn();
+    db.pragma(`user_version = ${version}`);
+  })();
+  console.log(`✅ Database migrated to v${version} (${message})`);
+}
+
+migrate(1, 'initial schema', () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS uploads (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,22 +97,18 @@ if (currentVersion < 1) {
     CREATE INDEX IF NOT EXISTS idx_uploads_reupload_token ON uploads(reupload_token);
     CREATE INDEX IF NOT EXISTS idx_api_keys_key_hash ON api_keys(key_hash);
   `);
-  db.pragma('user_version = 1');
-  console.log('✅ Database initialized (v1)');
-}
+});
 
-if (currentVersion < 2) {
+migrate(2, 'ip/ua/referer', () => {
   db.exec(`
     ALTER TABLE uploads ADD COLUMN ip_address TEXT;
     ALTER TABLE uploads ADD COLUMN user_agent TEXT;
     ALTER TABLE uploads ADD COLUMN referer TEXT;
     CREATE INDEX IF NOT EXISTS idx_uploads_ip_address ON uploads(ip_address);
   `);
-  db.pragma('user_version = 2');
-  console.log('✅ Database migrated to v2 (ip/ua/referer)');
-}
+});
 
-if (currentVersion < 3) {
+migrate(3, 'upload_links history', () => {
   db.exec(`
     CREATE TABLE IF NOT EXISTS upload_links (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -100,11 +127,9 @@ if (currentVersion < 3) {
     INSERT INTO upload_links (upload_uuid, irys_url, arweave_id, ar_url, reason, created_at)
     SELECT uuid, irys_url, arweave_id, ar_url, 'initial', created_at FROM uploads;
   `);
-  db.pragma('user_version = 3');
-  console.log('✅ Database migrated to v3 (upload_links history)');
-}
+});
 
-if (currentVersion < 4) {
+migrate(4, 'cost, geo, cron_runs', () => {
   db.exec(`
     -- Per-revision cost in wei
     ALTER TABLE upload_links ADD COLUMN price_wei TEXT;
@@ -129,11 +154,9 @@ if (currentVersion < 4) {
     CREATE INDEX IF NOT EXISTS idx_cron_runs_started_at ON cron_runs(started_at);
     CREATE INDEX IF NOT EXISTS idx_cron_runs_job ON cron_runs(job);
   `);
-  db.pragma('user_version = 4');
-  console.log('✅ Database migrated to v4 (cost, geo, cron_runs)');
-}
+});
 
-if (currentVersion < 5) {
+migrate(5, 'users, folders, tags, junctions', () => {
   db.exec(`
     -- User accounts (id = Supabase auth UUID)
     CREATE TABLE users (
@@ -234,11 +257,9 @@ if (currentVersion < 5) {
     CREATE INDEX idx_tags_user ON tags(user_id);
     CREATE INDEX idx_users_handle ON users(handle);
   `);
-  db.pragma('user_version = 5');
-  console.log('✅ Database migrated to v5 (users, folders, tags, junctions)');
-}
+});
 
-if (currentVersion < 6) {
+migrate(6, 'plans, user_plans, pre-claim users', () => {
   db.exec(`
     -- Pre-claim users + claim-token flow
     ALTER TABLE users ADD COLUMN supabase_user_id TEXT;
@@ -306,28 +327,22 @@ if (currentVersion < 6) {
       ('beacon',  'Beacon',  'Power archivist',                    '500 uploads per month, custom domain, OG images for shareability, bulk operations.',            'monthly',  2900, 'USD', 500,  NULL, '{"custom_accent":true,"custom_domain":true,"private_folders":true,"og_image":true,"priority_refresh":true,"bulk":true,"analytics":true}', 3, 0),
       ('archive', 'Archive', 'One-time, forever',                  'Lifetime plan, unlimited uploads, every feature, no recurring fees.',                            'one_time', 29900,'USD', NULL, NULL, '{"custom_accent":true,"custom_domain":true,"private_folders":true,"og_image":true,"priority_refresh":true,"bulk":true,"analytics":true,"lifetime":true}', 4, 0);
   `);
-  db.pragma('user_version = 6');
-  console.log('✅ Database migrated to v6 (plans, user_plans, pre-claim users)');
-}
+});
 
-if (currentVersion < 7) {
+migrate(7, 'user preferred_locale', () => {
   db.exec(`
     ALTER TABLE users ADD COLUMN preferred_locale TEXT NOT NULL DEFAULT 'en';
   `);
-  db.pragma('user_version = 7');
-  console.log('✅ Database migrated to v7 (user preferred_locale)');
-}
+});
 
-if (currentVersion < 8) {
+migrate(8, 'daily_upload_limit on plans', () => {
   db.exec(`
     ALTER TABLE plans ADD COLUMN daily_upload_limit INTEGER;
     UPDATE plans SET daily_upload_limit = 3 WHERE slug = 'drift';
   `);
-  db.pragma('user_version = 8');
-  console.log('✅ Database migrated to v8 (daily_upload_limit on plans)');
-}
+});
 
-if (currentVersion < 9) {
+migrate(9, 'folder privacy: password + email access', () => {
   db.exec(`
     ALTER TABLE folders ADD COLUMN password_hash TEXT;
     ALTER TABLE folders ADD COLUMN access_mode TEXT NOT NULL DEFAULT 'open'
@@ -349,19 +364,32 @@ if (currentVersion < 9) {
     UPDATE plans SET features_json = json_set(features_json, '$.password_lock', 0, '$.email_sharing', 0) WHERE slug = 'drift';
     UPDATE plans SET features_json = json_set(features_json, '$.password_lock', 1, '$.email_sharing', 1) WHERE slug IN ('signal','beacon','archive');
   `);
-  db.pragma('user_version = 9');
-  console.log('✅ Database migrated to v9 (folder privacy: password + email access)');
-}
+});
 
-if (currentVersion < 10) {
+migrate(10, 'Stripe price IDs', () => {
   db.exec(`
     UPDATE plans SET stripe_price_id = 'price_1TcDz86HdcJkNlot1qbeTpOq' WHERE slug = 'signal';
     UPDATE plans SET stripe_price_id = 'price_1TcDzp6HdcJkNlotahMVE1oY' WHERE slug = 'beacon';
     UPDATE plans SET stripe_price_id = 'price_1TcE0S6HdcJkNlotlWfcqTD2' WHERE slug = 'archive';
   `);
-  db.pragma('user_version = 10');
-  console.log('✅ Database migrated to v10 (Stripe price IDs)');
-}
+});
+
+migrate(11, 'payment idempotency + email index', () => {
+  db.exec(`
+    -- Dedupe any retry-created rows before adding the unique index
+    DELETE FROM user_plans
+     WHERE payment_reference IS NOT NULL
+       AND id NOT IN (
+         SELECT MIN(id) FROM user_plans
+         WHERE payment_reference IS NOT NULL
+         GROUP BY payment_provider, payment_reference
+       );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_plans_payment_ref
+      ON user_plans(payment_provider, payment_reference)
+      WHERE payment_reference IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+  `);
+});
 
 // =====================================================
 // PREPARED STATEMENTS — uploads
@@ -979,12 +1007,17 @@ const _setUploadFields = db.prepare(`
     nsfw = COALESCE(@nsfw, nsfw)
   WHERE uuid = @uuid AND user_id = @user_id
 `);
+const VALID_VISIBILITY = ['public', 'unlisted', 'private'];
+
 function updateUserUpload(userId, uuid, patch) {
+  // Public exposure is the fail-open negative test (visibility != 'private'),
+  // so an invalid value would silently make a file public. Whitelist hard.
+  const visibility = VALID_VISIBILITY.includes(patch.visibility) ? patch.visibility : null;
   _setUploadFields.run({
     uuid, user_id: userId,
     title: patch.title ?? null,
     caption: patch.caption ?? null,
-    visibility: patch.visibility ?? null,
+    visibility,
     nsfw: patch.nsfw == null ? null : (patch.nsfw ? 1 : 0),
   });
   return getUploadById(uuid);
@@ -1004,8 +1037,10 @@ function verifyFolderPassword(password, stored) {
   if (!stored) return false;
   const [salt, hash] = stored.split(':');
   if (!salt || !hash) return false;
-  const test = crypto.scryptSync(password, salt, 32).toString('hex');
-  return test === hash;
+  const test = crypto.scryptSync(password, salt, 32);
+  const expected = Buffer.from(hash, 'hex');
+  if (test.length !== expected.length) return false;
+  return crypto.timingSafeEqual(test, expected);
 }
 
 function setFolderPassword(userId, folderId, password) {
@@ -1388,28 +1423,75 @@ const _insertUserPlan = db.prepare(`
   VALUES (@user_id, @plan_id, @status, @payment_status, @payment_provider, @payment_reference, datetime('now'), @ends_at, @notes, @granted_by_user_id)
 `);
 
-function assignPlan(userId, { plan_id, status = 'active', payment_status = null, payment_provider = 'admin_grant', payment_reference = null, ends_at = null, notes = null, granted_by_user_id = null }) {
-  // Demote any existing active plan to expired
-  db.prepare("UPDATE user_plans SET status = 'expired', updated_at = datetime('now') WHERE user_id = ? AND status = 'active'").run(userId);
-  const info = _insertUserPlan.run({
-    user_id: userId, plan_id, status, payment_status, payment_provider, payment_reference,
-    ends_at, notes, granted_by_user_id,
-  });
+/** Normalize any ends_at input (ISO with T/Z, or SQLite format) to 'YYYY-MM-DD HH:MM:SS' UTC, or null. */
+function normalizeEndsAt(value) {
+  if (!value) return null;
+  const iso = String(value).includes('T') ? String(value) : String(value).replace(' ', 'T') + 'Z';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString().replace('T', ' ').slice(0, 19);
+}
+
+const _assignPlanTx = db.transaction((userId, params) => {
+  // Demote any existing active plan only when the new one takes effect
+  // immediately; a 'pending' assignment must not displace the current plan.
+  if (params.status === 'active') {
+    db.prepare("UPDATE user_plans SET status = 'expired', updated_at = datetime('now') WHERE user_id = ? AND status = 'active'").run(userId);
+  }
+  const info = _insertUserPlan.run({ user_id: userId, ...params });
   return db.prepare('SELECT * FROM user_plans WHERE id = ?').get(info.lastInsertRowid);
+});
+
+function assignPlan(userId, { plan_id, status = 'active', payment_status = null, payment_provider = 'admin_grant', payment_reference = null, ends_at = null, notes = null, granted_by_user_id = null }) {
+  const params = {
+    plan_id, status, payment_status, payment_provider, payment_reference,
+    ends_at: normalizeEndsAt(ends_at), notes, granted_by_user_id,
+  };
+  try {
+    return _assignPlanTx(userId, params);
+  } catch (err) {
+    // Webhook retry with the same payment_reference — idempotent no-op.
+    if (String(err.message).includes('UNIQUE') && payment_reference) {
+      return db.prepare('SELECT * FROM user_plans WHERE payment_provider = ? AND payment_reference = ?')
+        .get(payment_provider, payment_reference) || null;
+    }
+    throw err;
+  }
+}
+
+/** Promote a user's pending plan row to active (used by payment webhooks). */
+function activatePendingPlan(userId, planId, { payment_reference = null, ends_at = null } = {}) {
+  const tx = db.transaction(() => {
+    db.prepare("UPDATE user_plans SET status = 'expired', updated_at = datetime('now') WHERE user_id = ? AND status = 'active'").run(userId);
+    const info = db.prepare(`
+      UPDATE user_plans SET status = 'active', payment_status = 'paid',
+             payment_reference = COALESCE(?, payment_reference),
+             ends_at = COALESCE(?, ends_at), updated_at = datetime('now')
+      WHERE id = (SELECT id FROM user_plans WHERE user_id = ? AND plan_id = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1)
+    `).run(payment_reference, normalizeEndsAt(ends_at), userId, planId);
+    return info.changes > 0;
+  });
+  return tx();
 }
 
 function getActiveUserPlan(userId) {
+  // Only 'active' grants entitlements — a 'pending' (awaiting payment
+  // confirmation) row must never unlock features or quotas.
   const row = db.prepare(`
     SELECT up.*, p.slug AS plan_slug, p.name AS plan_name, p.monthly_upload_limit, p.daily_upload_limit, p.total_upload_limit,
            p.billing_period, p.price_cents, p.currency, p.features_json
     FROM user_plans up JOIN plans p ON p.id = up.plan_id
-    WHERE up.user_id = ? AND up.status IN ('active','pending')
+    WHERE up.user_id = ? AND up.status = 'active'
     ORDER BY up.created_at DESC LIMIT 1
   `).get(userId);
   if (!row) return null;
-  if (row.ends_at && new Date(row.ends_at + 'Z') < new Date()) {
-    db.prepare("UPDATE user_plans SET status = 'expired', updated_at = datetime('now') WHERE id = ?").run(row.id);
-    return null;
+  if (row.ends_at) {
+    const iso = row.ends_at.includes('T') ? row.ends_at : row.ends_at.replace(' ', 'T');
+    const ends = new Date(iso.endsWith('Z') ? iso : iso + 'Z');
+    if (!isNaN(ends.getTime()) && ends < new Date()) {
+      db.prepare("UPDATE user_plans SET status = 'expired', updated_at = datetime('now') WHERE id = ?").run(row.id);
+      return null;
+    }
   }
   return row;
 }
@@ -1440,6 +1522,18 @@ function getUserDailyUsage(userId) {
     WHERE user_id = ? AND created_at >= datetime('now', 'start of day')
   `).get(userId);
   return row.uploads_today;
+}
+
+/** Server-side backstop for the anonymous tier — the limiter cookie lives
+ *  on the Vercel side and can simply be cleared by the client. */
+function countAnonUploadsTodayByIp(ip) {
+  if (!ip) return 0;
+  const row = db.prepare(`
+    SELECT COUNT(*) AS n
+    FROM uploads
+    WHERE user_id IS NULL AND ip_address = ? AND created_at >= datetime('now', 'start of day')
+  `).get(ip);
+  return row.n;
 }
 
 module.exports = {
@@ -1486,5 +1580,6 @@ module.exports = {
   // plans
   getAllPlans, getPlanById, getPlanBySlug, getDefaultPlan,
   createPlan, updatePlan,
-  assignPlan, getActiveUserPlan, getUserPlanHistory, getUserMonthlyUsage, getUserDailyUsage,
+  assignPlan, activatePendingPlan, getActiveUserPlan, getUserPlanHistory,
+  getUserMonthlyUsage, getUserDailyUsage, countAnonUploadsTodayByIp,
 };

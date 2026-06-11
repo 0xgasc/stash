@@ -8,11 +8,13 @@ export default function CheckoutButtons({
   planSlug,
   planName,
   priceDollars,
+  userId,
   providers,
 }: {
   planSlug: string
   planName: string
   priceDollars: string
+  userId: string
   providers: { stripe: boolean; recurrente: boolean; stablepay: boolean }
 }) {
   const [loading, setLoading] = useState<string | null>(null)
@@ -52,11 +54,12 @@ export default function CheckoutButtons({
       if (res.ok) {
         window.location.href = '/checkout/success'
       } else {
-        setError('Payment received but activation failed. Contact support.')
+        setError('We could not record your payment. Save your transaction hash and contact support — your funds are safe.')
         setLoading(null)
       }
     } catch {
-      window.location.href = '/checkout/success'
+      setError('Network error while recording your payment. Save your transaction hash and contact support — your funds are safe.')
+      setLoading(null)
     }
   }, [planSlug])
 
@@ -79,6 +82,7 @@ export default function CheckoutButtons({
           <StablePayWidget
             amount={priceDollars}
             product={`${planName} — Stash`}
+            metadata={{ user_id: userId, plan_slug: planSlug }}
             onSuccess={handleCryptoSuccess}
           />
         )}

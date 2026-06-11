@@ -89,8 +89,9 @@ router.post('/upload', requireApiKey, apiUploadLimiter, upload.single('file'), a
     });
     scheduleGeoLookup(record.uuid, record.ip_address);
 
-    // Cleanup temp file
-    try { fs.unlinkSync(filePath); } catch {}
+    // Preserve original on the volume (moves the temp file)
+    const { preserveOriginal } = require('../utils/originals');
+    preserveOriginal(filePath, record.uuid);
 
     console.log(`✅ API upload complete: ${result.url}`);
 
