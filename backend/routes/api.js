@@ -14,7 +14,7 @@ const {
   insertUpload, getUploads, getUploadById, getUploadByReuploadToken,
   updateUploadAfterReupload, getUploadLinks, getExpiringUploads,
   getCronRuns,
-  insertApiKey, getApiKeys, deactivateApiKey, getStats,
+  insertApiKey, getApiKeys, deactivateApiKey, reactivateApiKey, getStats,
 } = require('../db');
 const { uploadFileToIrysFromPath } = require('../utils/irysUploader');
 const { reuploadFromExisting } = require('../utils/reupload');
@@ -360,6 +360,13 @@ router.post('/api-keys', requireAdminSecret, (req, res) => {
 router.get('/api-keys', requireAdminSecret, (req, res) => {
   const keys = getApiKeys();
   res.json({ api_keys: keys });
+});
+
+router.patch('/api-keys/:id/reactivate', requireAdminSecret, (req, res) => {
+  const id = parseInt(req.params.id);
+  if (isNaN(id)) return res.status(400).json({ error: 'Invalid key ID' });
+  reactivateApiKey(id);
+  res.json({ success: true });
 });
 
 router.delete('/api-keys/:id', requireAdminSecret, (req, res) => {

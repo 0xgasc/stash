@@ -623,6 +623,11 @@ function deactivateApiKey(id) {
   return _deactivateApiKey.run(id);
 }
 
+const _reactivateApiKey = db.prepare('UPDATE api_keys SET is_active = 1 WHERE id = ?');
+function reactivateApiKey(id) {
+  return _reactivateApiKey.run(id);
+}
+
 const _updateApiKeyLastUsed = db.prepare("UPDATE api_keys SET last_used_at = datetime('now') WHERE id = ?");
 function updateApiKeyLastUsed(id) {
   _updateApiKeyLastUsed.run(id);
@@ -1555,6 +1560,7 @@ module.exports = {
   insertApiKey,
   getApiKeys,
   deactivateApiKey,
+  reactivateApiKey,
   findApiKeyByHash,
   updateApiKeyLastUsed,
   getStats,
