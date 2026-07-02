@@ -125,4 +125,28 @@ router.patch('/plans/:id', (req, res) => {
   res.json({ plan: updatePlan(plan.id, req.body || {}) });
 });
 
+// =====================================================
+// POST /migrate-gateway — Bulk swap gateway domain in all irys_url values
+// =====================================================
+router.post('/migrate-gateway', (req, res) => {
+  const { from, to } = req.body || {};
+  if (!from || !to) return res.status(400).json({ error: 'from and to required' });
+
+  const { db } = require('../db');
+  const result = db.prepare(`
+    UPDATE uploads SET irys_url = REPLACE(irys_url, ?, ?)
+    WHERE irys_url LIKE ?
+  `).run(from, to, `${from}%`);
+
+  const linkResult = db.prepare(`
+    UPDATE upload_links SET irys_url = REPLACE(irys_url, ?, ?)
+    WHERE irys_url LIKE ?
+  `).run(from, to, `${from}%`);
+
+  res.json({
+    uploads_updated: result.changes,
+    links_updated: linkResult.changes,
+  });
+});
+
 module.exports = router;

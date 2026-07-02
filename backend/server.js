@@ -403,6 +403,7 @@ app.get('/f/:uuid', (req, res) => {
   if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).send('Invalid id');
   const upload = getUploadById(uuid);
   if (!upload || !upload.irys_url) return res.status(404).send('Not found');
+  res.set('Access-Control-Allow-Origin', '*');
   res.set('Cache-Control', 'no-store');
   res.redirect(302, upload.irys_url);
 });
@@ -417,6 +418,7 @@ app.get('/f/:uuid/raw', (req, res) => {
   const { getOriginalPath } = require('./utils/originals');
   const filePath = getOriginalPath(uuid);
   if (!filePath) return res.status(404).send('Original not preserved');
+  res.set('Access-Control-Allow-Origin', '*');
   res.set('Content-Type', upload.content_type || 'application/octet-stream');
   res.set('Content-Disposition', `inline; filename="${upload.filename || uuid}"`);
   res.set('Cache-Control', 'public, max-age=31536000, immutable');
