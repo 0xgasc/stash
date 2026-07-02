@@ -37,7 +37,7 @@ const upload = multer({
 // Rate limiter for programmatic uploads
 const apiUploadLimiter = rateLimit({
   windowMs: 60 * 60 * 1000,
-  max: 60,
+  max: 120,
   keyGenerator: (req) => req.apiKey?.name || 'anon',
   message: { error: 'Upload rate limit exceeded, try again later' },
   standardHeaders: true,
