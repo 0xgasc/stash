@@ -402,8 +402,16 @@ app.get('/f/:uuid', (req, res) => {
   const { uuid } = req.params;
   if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).send('Invalid id');
   const upload = getUploadById(uuid);
-  if (!upload || !upload.irys_url) return res.status(404).send('Not found');
+  if (!upload) return res.status(404).send('Not found');
   res.set('Access-Control-Allow-Origin', '*');
+  const { getOriginalPath } = require('./utils/originals');
+  const filePath = getOriginalPath(uuid);
+  if (filePath) {
+    res.set('Content-Type', upload.content_type || 'application/octet-stream');
+    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    return fs.createReadStream(filePath).pipe(res);
+  }
+  if (!upload.irys_url) return res.status(404).send('Not found');
   res.set('Cache-Control', 'no-store');
   res.redirect(302, upload.irys_url);
 });
