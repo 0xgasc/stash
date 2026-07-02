@@ -407,6 +407,22 @@ app.get('/f/:uuid', (req, res) => {
   res.redirect(302, upload.irys_url);
 });
 
+// GET /f/:uuid/raw — serve the original file directly from the volume.
+// Bypasses the gateway redirect so files load even when devnet is down.
+app.get('/f/:uuid/raw', (req, res) => {
+  const { uuid } = req.params;
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).send('Invalid id');
+  const upload = getUploadById(uuid);
+  if (!upload) return res.status(404).send('Not found');
+  const { getOriginalPath } = require('./utils/originals');
+  const filePath = getOriginalPath(uuid);
+  if (!filePath) return res.status(404).send('Original not preserved');
+  res.set('Content-Type', upload.content_type || 'application/octet-stream');
+  res.set('Content-Disposition', `inline; filename="${upload.filename || uuid}"`);
+  res.set('Cache-Control', 'public, max-age=31536000, immutable');
+  fs.createReadStream(filePath).pipe(res);
+});
+
 // =====================================================
 // HEALTH CHECK
 // =====================================================
