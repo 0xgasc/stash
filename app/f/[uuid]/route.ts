@@ -13,6 +13,15 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
+const CORS_HEADERS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, { status: 204, headers: CORS_HEADERS })
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ uuid: string }> }
@@ -33,7 +42,10 @@ export async function GET(
     }
     return NextResponse.redirect(location, {
       status: 302,
-      headers: { 'Cache-Control': 'no-store' },
+      headers: {
+        'Cache-Control': 'no-store',
+        ...CORS_HEADERS,
+      },
     })
   } catch {
     return new NextResponse('Temporarily unavailable', { status: 503 })
