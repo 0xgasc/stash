@@ -583,14 +583,31 @@ function getCronRuns({ limit = 20 } = {}) {
 const _findStaleUploads = db.prepare(`
   SELECT u.uuid, u.filename
   FROM uploads u
-  WHERE (
-    SELECT MAX(created_at) FROM upload_links WHERE upload_uuid = u.uuid
+  WHERE COALESCE(
+    (SELECT MAX(created_at) FROM upload_links WHERE upload_uuid = u.uuid),
+    u.created_at
   ) < datetime('now', @cutoff)
   ORDER BY u.created_at ASC
   LIMIT @limit
 `);
 function findStaleUploads({ olderThanDays = 50, limit = 25 } = {}) {
   return _findStaleUploads.all({ cutoff: `-${olderThanDays} days`, limit });
+}
+
+const _getAllUploadsForBackfill = db.prepare(`
+  SELECT uuid, filename, arweave_id, irys_url
+  FROM uploads
+  ORDER BY created_at ASC
+`);
+function getUploadsWithoutOriginals({ limit = 25 } = {}) {
+  const { getOriginalPath } = require('./utils/originals');
+  const all = _getAllUploadsForBackfill.all();
+  const missing = [];
+  for (const row of all) {
+    if (!getOriginalPath(row.uuid)) missing.push(row);
+    if (missing.length >= limit) break;
+  }
+  return missing;
 }
 
 // =====================================================
@@ -1550,6 +1567,7 @@ module.exports = {
   updateUploadAfterReupload,
   getUploadLinks,
   findStaleUploads,
+  getUploadsWithoutOriginals,
   getExpiringUploads,
   updateGeo,
   findUuidsNeedingGeo,

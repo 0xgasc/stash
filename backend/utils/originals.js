@@ -42,4 +42,11 @@ function getOriginalPath(uuid) {
   return fs.existsSync(p) ? p : null;
 }
 
-module.exports = { preserveOriginal, getOriginalPath, ORIGINALS_DIR };
+/** Save a buffer as the original for a uuid. Used by backfill cron. */
+function preserveOriginalFromBuffer(buffer, uuid) {
+  ensureDir();
+  const dest = path.join(ORIGINALS_DIR, uuid);
+  fs.writeFileSync(dest, buffer);
+}
+
+module.exports = { preserveOriginal, preserveOriginalFromBuffer, getOriginalPath, ORIGINALS_DIR };
