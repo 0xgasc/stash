@@ -11,7 +11,7 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { getUploadsWithoutOriginals, startCronRun, finishCronRun } = require('../db');
+const { getUploadsWithoutOriginals, markBackfillSkipped, startCronRun, finishCronRun } = require('../db');
 const { getOriginalPath, preserveOriginalFromBuffer, ORIGINALS_DIR } = require('../utils/originals');
 
 const RUN_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -43,8 +43,9 @@ async function runOnce() {
       processed++;
       const txId = arweave_id || (irys_url ? irys_url.split('/').pop() : null);
       if (!txId) {
+        markBackfillSkipped(uuid);
         failed++;
-        errors.push(`${filename || uuid}: no arweave_id or irys_url`);
+        errors.push(`${filename || uuid}: no arweave_id or irys_url — marked skipped`);
         continue;
       }
 
@@ -52,17 +53,19 @@ async function runOnce() {
         const url = `https://arweave.net/${txId}`;
         const resp = await fetch(url, { redirect: 'follow' });
         if (!resp.ok) {
+          markBackfillSkipped(uuid);
           failed++;
-          errors.push(`${filename || uuid}: arweave ${resp.status}`);
-          console.error(`❌ Backfill ${filename} (${uuid}): HTTP ${resp.status} from arweave.net`);
+          errors.push(`${filename || uuid}: arweave ${resp.status} — marked skipped`);
+          console.error(`❌ Backfill ${filename} (${uuid}): HTTP ${resp.status} from arweave.net — marked skipped`);
           continue;
         }
 
         const contentType = resp.headers.get('content-type') || '';
         if (contentType.includes('text/html') && !filename?.endsWith('.html')) {
+          markBackfillSkipped(uuid);
           failed++;
-          errors.push(`${filename || uuid}: arweave returned HTML (likely not our file)`);
-          console.error(`❌ Backfill ${filename} (${uuid}): arweave returned HTML, skipping`);
+          errors.push(`${filename || uuid}: arweave returned HTML — marked skipped`);
+          console.error(`❌ Backfill ${filename} (${uuid}): arweave returned HTML — marked skipped`);
           continue;
         }
 

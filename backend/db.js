@@ -391,6 +391,12 @@ migrate(11, 'payment idempotency + email index', () => {
   `);
 });
 
+migrate(12, 'backfill_skipped flag for unrecoverable uploads', () => {
+  db.exec(`
+    ALTER TABLE uploads ADD COLUMN backfill_skipped INTEGER DEFAULT 0;
+  `);
+});
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -597,6 +603,7 @@ function findStaleUploads({ olderThanDays = 50, limit = 25 } = {}) {
 const _getAllUploadsForBackfill = db.prepare(`
   SELECT uuid, filename, arweave_id, irys_url
   FROM uploads
+  WHERE backfill_skipped = 0
   ORDER BY created_at ASC
 `);
 function getUploadsWithoutOriginals({ limit = 25 } = {}) {
@@ -608,6 +615,25 @@ function getUploadsWithoutOriginals({ limit = 25 } = {}) {
     if (missing.length >= limit) break;
   }
   return missing;
+}
+
+const _markBackfillSkipped = db.prepare(`
+  UPDATE uploads SET backfill_skipped = 1 WHERE uuid = ?
+`);
+function markBackfillSkipped(uuid) {
+  _markBackfillSkipped.run(uuid);
+}
+
+function getBackfillStats() {
+  const { getOriginalPath } = require('./utils/originals');
+  const all = db.prepare('SELECT uuid, backfill_skipped FROM uploads').all();
+  let withOriginal = 0, missing = 0, skipped = 0;
+  for (const row of all) {
+    if (getOriginalPath(row.uuid)) withOriginal++;
+    else if (row.backfill_skipped) skipped++;
+    else missing++;
+  }
+  return { total: all.length, withOriginal, missing, skipped };
 }
 
 // =====================================================
@@ -1568,6 +1594,8 @@ module.exports = {
   getUploadLinks,
   findStaleUploads,
   getUploadsWithoutOriginals,
+  markBackfillSkipped,
+  getBackfillStats,
   getExpiringUploads,
   updateGeo,
   findUuidsNeedingGeo,

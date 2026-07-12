@@ -1,27 +1,18 @@
 /**
  * Health-check cron — every hour:
- *  - Sepolia wallet balance below SEPOLIA_LOW_THRESHOLD (default 0.1 ETH)
- *  - Irys devnet balance below IRYS_LOW_THRESHOLD (default 0.005 ETH)
- *  - Last reupload-stale cron crashed/failed
- *  - Any uploads past their refresh deadline (older than threshold + 3d)
- *
- * Each condition has its own dedupe key so the alert mailer's 6h
- * cooldown only suppresses repeats of the same condition.
+ *  - Sepolia wallet balance below threshold
+ *  - Last backfill cron crashed
+ *  - Backfill progress report (originals coverage)
  */
 const { Wallet } = require('@ethersproject/wallet');
 const { sendAlert } = require('../utils/alerts');
-const { getCronRuns, db } = require('../db');
+const { getCronRuns, getBackfillStats } = require('../db');
 
 const RUN_INTERVAL_MS = 60 * 60 * 1000; // 1h
 const FIRST_RUN_DELAY_MS = 90 * 1000;   // 90s after boot
 
 const SEPOLIA_LOW_THRESHOLD_ETH = parseFloat(process.env.SEPOLIA_LOW_THRESHOLD || '0.1');
-const IRYS_LOW_THRESHOLD_ETH = parseFloat(process.env.IRYS_LOW_THRESHOLD || '0.005');
-const REUPLOAD_AFTER_DAYS = parseInt(process.env.REUPLOAD_AFTER_DAYS || '15', 10);
-const MISSED_GRACE_DAYS = 3;
 
-// Some Sepolia RPCs (Alchemy free tier, etc.) reject eth_getBalance without
-// proper auth. Fall back to community endpoints so the alert check stays alive.
 const SEPOLIA_RPC_FALLBACKS = [
   'https://ethereum-sepolia-rpc.publicnode.com',
   'https://rpc.sepolia.org',
@@ -53,15 +44,6 @@ async function fetchSepoliaBalance() {
   return null;
 }
 
-async function fetchIrysBalance() {
-  if (!process.env.PRIVATE_KEY) return null;
-  const key = process.env.PRIVATE_KEY.trim();
-  const wallet = new Wallet(key.startsWith('0x') ? key : `0x${key}`);
-  const res = await fetch(`https://devnet.irys.xyz/account/balance/ethereum?address=${wallet.address}`);
-  const data = await res.json();
-  return BigInt(data.balance || '0');
-}
-
 function weiToEth(wei) {
   const whole = wei / BigInt(1e18);
   const frac = (wei % BigInt(1e18)).toString().padStart(18, '0').slice(0, 6);
@@ -69,7 +51,7 @@ function weiToEth(wei) {
 }
 
 async function runOnce() {
-  // 1. Wallet balances
+  // 1. Sepolia wallet balance
   try {
     const sepolia = await fetchSepoliaBalance();
     if (sepolia) {
@@ -79,7 +61,7 @@ async function runOnce() {
           key: 'sepolia-low',
           subject: `[stash] Sepolia balance low: ${eth.toFixed(4)} ETH`,
           html: `<p>Wallet <code>${sepolia.address}</code> has <strong>${eth.toFixed(4)} ETH</strong> on Sepolia, below the ${SEPOLIA_LOW_THRESHOLD_ETH} ETH alert threshold.</p>
-<p>Top up from a Sepolia faucet to keep funding Irys uploads.</p>`,
+<p>Top up from a Sepolia faucet to keep funding uploads.</p>`,
         });
       }
     }
@@ -87,76 +69,17 @@ async function runOnce() {
     console.error('Alert check (sepolia) failed:', e.message);
   }
 
-  try {
-    const irysWei = await fetchIrysBalance();
-    if (irysWei !== null) {
-      const eth = parseFloat(weiToEth(irysWei));
-      if (eth < IRYS_LOW_THRESHOLD_ETH) {
-        // ── Auto-fund Irys from Sepolia ──────────────────
-        const FUND_AMOUNT_ETH = parseFloat(process.env.IRYS_AUTO_FUND_AMOUNT || '0.1');
-        const irysEthStr = weiToEth(irysWei);
-
-        console.log(`⚠️  Irys low: ${irysEthStr} ETH < ${IRYS_LOW_THRESHOLD_ETH} ETH — auto-funding ${FUND_AMOUNT_ETH} ETH...`);
-
-        // Send alert first so we know it tried
-        await sendAlert({
-          key: 'irys-low',
-          subject: `[stash] Irys devnet balance low: ${irysEthStr} ETH — auto-fund triggered`,
-          html: `<p>Irys devnet balance was <strong>${irysEthStr} ETH</strong> (below ${IRYS_LOW_THRESHOLD_ETH} ETH).</p>
-<p>Auto-fund of <strong>${FUND_AMOUNT_ETH} ETH</strong> from Sepolia wallet has been triggered.</p>`,
-        });
-
-        // Auto-fund
-        try {
-          const { Uploader } = await import('@irys/upload');
-          const { Ethereum } = await import('@irys/upload-ethereum');
-
-          const key = process.env.PRIVATE_KEY.trim().replace(/^0x/i, '');
-          const sepoliaRpc = process.env.SEPOLIA_RPC;
-          const uploader = await Uploader(Ethereum).withWallet(key).withRpc(sepoliaRpc).devnet();
-
-          const [whole, frac = ''] = FUND_AMOUNT_ETH.toString().split('.');
-          const fracPadded = (frac + '0'.repeat(18)).slice(0, 18);
-          const amountWei = (BigInt(whole) * BigInt(1e18) + BigInt(fracPadded)).toString();
-
-          const receipt = await uploader.fund(amountWei);
-          console.log(`✅ Auto-funded Irys. Tx: ${receipt.id}`);
-
-          await sendAlert({
-            key: `irys-autofund-${receipt.id.slice(0, 8)}`,
-            subject: `[stash] ✅ Irys auto-funded: ${FUND_AMOUNT_ETH} ETH`,
-            html: `<p>Successfully auto-funded Irys with <strong>${FUND_AMOUNT_ETH} ETH</strong> from Sepolia wallet.</p>
-<p>Tx ID: <code>${receipt.id}</code></p>
-<p>New Irys balance will reflect once the tx is mined (~1-3 min).</p>`,
-          });
-        } catch (fundErr) {
-          console.error('❌ Auto-fund failed:', fundErr.message);
-          await sendAlert({
-            key: `irys-autofund-fail-${Date.now()}`,
-            subject: `[stash] ❌ Irys auto-fund FAILED`,
-            html: `<p>Irys balance is ${irysEthStr} ETH (below ${IRYS_LOW_THRESHOLD_ETH}) but auto-fund of ${FUND_AMOUNT_ETH} ETH failed:</p>
-<p><code>${fundErr.message}</code></p>
-<p>Manual intervention needed. Run: <code>node backend/scripts/fund-irys.js ${FUND_AMOUNT_ETH}</code></p>`,
-          });
-        }
-      }
-    }
-  } catch (e) {
-    console.error('Alert check (irys) failed:', e.message);
-  }
-
-  // 2. Cron health
+  // 2. Cron health — only alert on crashes, not expected failures
   try {
     const runs = getCronRuns({ limit: 1 });
     if (runs.length > 0) {
       const last = runs[0];
-      if (last.status === 'crashed' || last.status === 'failed') {
+      if (last.status === 'crashed') {
         await sendAlert({
-          key: `cron-${last.status}-${last.id}`,
-          subject: `[stash] Re-upload cron ${last.status}`,
-          html: `<p>Last re-upload cron run (id=${last.id}, started ${last.started_at}) ended with status <strong>${last.status}</strong>.</p>
-<p>Processed ${last.processed_count}, succeeded ${last.success_count}, failed ${last.failed_count}.</p>
-<p>Errors: <code>${(last.error_summary || '(none)').replace(/</g, '&lt;')}</code></p>`,
+          key: `cron-crashed-${last.id}`,
+          subject: `[stash] Backfill cron crashed`,
+          html: `<p>Last backfill cron run (id=${last.id}, started ${last.started_at}) <strong>crashed</strong>.</p>
+<p>Error: <code>${(last.error_summary || '(none)').replace(/</g, '&lt;')}</code></p>`,
         });
       }
     }
@@ -164,29 +87,21 @@ async function runOnce() {
     console.error('Alert check (cron health) failed:', e.message);
   }
 
-  // 3. Missed refresh — uploads past deadline
+  // 3. Originals coverage — alert if recoverable files remain stuck
   try {
-    const overdueDays = REUPLOAD_AFTER_DAYS + MISSED_GRACE_DAYS;
-    const overdue = db.prepare(`
-      SELECT u.uuid, u.filename,
-        (SELECT MAX(created_at) FROM upload_links WHERE upload_uuid = u.uuid) AS latest_link_at
-      FROM uploads u
-      WHERE (
-        SELECT MAX(created_at) FROM upload_links WHERE upload_uuid = u.uuid
-      ) < datetime('now', '-' || @days || ' days')
-      LIMIT 5
-    `).all({ days: overdueDays });
-
-    if (overdue.length > 0) {
-      const list = overdue.map((r) => `<li><code>${r.filename}</code> — last refreshed ${r.latest_link_at}</li>`).join('');
+    const stats = getBackfillStats();
+    const pct = stats.total > 0 ? Math.round((stats.withOriginal / stats.total) * 100) : 100;
+    if (stats.missing > 0) {
       await sendAlert({
-        key: 'overdue-refresh',
-        subject: `[stash] ${overdue.length} upload(s) past refresh deadline (${overdueDays}d)`,
-        html: `<p>The following uploads have not been refreshed in over ${overdueDays} days, despite the cron threshold being ${REUPLOAD_AFTER_DAYS} days. The cron may not be keeping up.</p><ul>${list}</ul>`,
+        key: 'backfill-progress',
+        subject: `[stash] ${stats.missing} upload(s) still missing originals (${pct}% covered)`,
+        html: `<p>Backfill coverage: <strong>${stats.withOriginal}</strong>/${stats.total} uploads have local originals (${pct}%).</p>
+<p>${stats.missing} file(s) can still potentially be recovered from arweave.net.</p>
+<p>${stats.skipped} file(s) confirmed unrecoverable (marked skipped).</p>`,
       });
     }
   } catch (e) {
-    console.error('Alert check (overdue) failed:', e.message);
+    console.error('Alert check (backfill progress) failed:', e.message);
   }
 }
 
@@ -195,7 +110,7 @@ function startAlertCron() {
     console.log('⏸  Alert cron disabled via ALERT_CRON_DISABLED=1');
     return;
   }
-  console.log(`🚨 Alert cron scheduled — every 1h (sepolia<${SEPOLIA_LOW_THRESHOLD_ETH}, irys<${IRYS_LOW_THRESHOLD_ETH}, overdue>${REUPLOAD_AFTER_DAYS + MISSED_GRACE_DAYS}d)`);
+  console.log(`🚨 Alert cron scheduled — every 1h (sepolia<${SEPOLIA_LOW_THRESHOLD_ETH}, cron health, backfill progress)`);
   setTimeout(() => {
     runOnce().catch((err) => console.error('Alert cron error:', err));
     setInterval(() => {
