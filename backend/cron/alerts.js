@@ -6,7 +6,7 @@
  */
 const { Wallet } = require('@ethersproject/wallet');
 const { sendAlert } = require('../utils/alerts');
-const { getCronRuns, getBackfillStats } = require('../db');
+const { getCronRuns } = require('../db');
 
 const RUN_INTERVAL_MS = 60 * 60 * 1000; // 1h
 const FIRST_RUN_DELAY_MS = 90 * 1000;   // 90s after boot
@@ -87,22 +87,6 @@ async function runOnce() {
     console.error('Alert check (cron health) failed:', e.message);
   }
 
-  // 3. Originals coverage — alert if recoverable files remain stuck
-  try {
-    const stats = getBackfillStats();
-    const pct = stats.total > 0 ? Math.round((stats.withOriginal / stats.total) * 100) : 100;
-    if (stats.missing > 0) {
-      await sendAlert({
-        key: 'backfill-progress',
-        subject: `[stash] ${stats.missing} upload(s) still missing originals (${pct}% covered)`,
-        html: `<p>Backfill coverage: <strong>${stats.withOriginal}</strong>/${stats.total} uploads have local originals (${pct}%).</p>
-<p>${stats.missing} file(s) can still potentially be recovered from arweave.net.</p>
-<p>${stats.skipped} file(s) confirmed unrecoverable (marked skipped).</p>`,
-      });
-    }
-  } catch (e) {
-    console.error('Alert check (backfill progress) failed:', e.message);
-  }
 }
 
 function startAlertCron() {
@@ -110,7 +94,7 @@ function startAlertCron() {
     console.log('⏸  Alert cron disabled via ALERT_CRON_DISABLED=1');
     return;
   }
-  console.log(`🚨 Alert cron scheduled — every 1h (sepolia<${SEPOLIA_LOW_THRESHOLD_ETH}, cron health, backfill progress)`);
+  console.log(`🚨 Alert cron scheduled — every 1h (sepolia<${SEPOLIA_LOW_THRESHOLD_ETH}, cron health)`);
   setTimeout(() => {
     runOnce().catch((err) => console.error('Alert cron error:', err));
     setInterval(() => {
