@@ -149,4 +149,24 @@ router.post('/migrate-gateway', (req, res) => {
   });
 });
 
+// =====================================================
+// POST /backfill — Reset skipped flags + trigger backfill run
+// GET  /backfill — Get backfill stats
+// =====================================================
+router.get('/backfill', (req, res) => {
+  const { getBackfillStats } = require('../db');
+  res.json(getBackfillStats());
+});
+
+router.post('/backfill', async (req, res) => {
+  const { resetAllBackfillSkipped, getBackfillStats } = require('../db');
+  const reset = resetAllBackfillSkipped();
+  const stats = getBackfillStats();
+
+  const { runOnce } = require('../cron/reuploadStale');
+  runOnce().catch((err) => console.error('Manual backfill error:', err));
+
+  res.json({ reset_count: reset, stats, message: 'Backfill triggered in background' });
+});
+
 module.exports = router;

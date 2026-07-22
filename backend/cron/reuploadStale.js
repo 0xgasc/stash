@@ -1,13 +1,10 @@
 /**
  * Backfill originals cron.
  *
- * Downloads files from arweave.net that don't have a local original on
- * the Railway volume. This ensures /f/:uuid can serve directly from disk
- * even if the Arweave gateway becomes unavailable.
- *
- * Previously this cron re-uploaded to Irys devnet to refresh expiring
- * gateway URLs. Now that we use arweave.net (permanent) and serve from
- * the volume, the job is to backfill local copies for legacy uploads.
+ * Downloads files that don't have a local original on the Railway volume.
+ * Tries devnet.irys.xyz first (where most files actually live), then
+ * falls back to arweave.net. Saves to the volume so /f/:uuid can serve
+ * directly from disk regardless of gateway availability.
  */
 const fs = require('fs');
 const path = require('path');
@@ -16,9 +13,35 @@ const { getOriginalPath, preserveOriginalFromBuffer, ORIGINALS_DIR } = require('
 
 const RUN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 2 * 60 * 1000;
-const MAX_PER_RUN = parseInt(process.env.REUPLOAD_MAX_PER_RUN || '25', 10);
+const MAX_PER_RUN = parseInt(process.env.REUPLOAD_MAX_PER_RUN || '50', 10);
+
+const GATEWAYS = [
+  'https://devnet.irys.xyz',
+  'https://arweave.net',
+];
 
 let running = false;
+
+async function tryDownload(txId, filename) {
+  for (const gw of GATEWAYS) {
+    try {
+      const url = `${gw}/${txId}`;
+      const resp = await fetch(url, { redirect: 'follow' });
+      if (!resp.ok) continue;
+
+      const contentType = resp.headers.get('content-type') || '';
+      if (contentType.includes('text/html') && !filename?.endsWith('.html')) continue;
+
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      if (buffer.length < 100) continue;
+
+      return { buffer, gateway: gw };
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
 
 async function runOnce() {
   if (running) {
@@ -45,38 +68,20 @@ async function runOnce() {
       if (!txId) {
         markBackfillSkipped(uuid);
         failed++;
-        errors.push(`${filename || uuid}: no arweave_id or irys_url — marked skipped`);
+        errors.push(`${filename || uuid}: no tx ID`);
         continue;
       }
 
-      try {
-        const url = `https://arweave.net/${txId}`;
-        const resp = await fetch(url, { redirect: 'follow' });
-        if (!resp.ok) {
-          markBackfillSkipped(uuid);
-          failed++;
-          errors.push(`${filename || uuid}: arweave ${resp.status} — marked skipped`);
-          console.error(`❌ Backfill ${filename} (${uuid}): HTTP ${resp.status} from arweave.net — marked skipped`);
-          continue;
-        }
-
-        const contentType = resp.headers.get('content-type') || '';
-        if (contentType.includes('text/html') && !filename?.endsWith('.html')) {
-          markBackfillSkipped(uuid);
-          failed++;
-          errors.push(`${filename || uuid}: arweave returned HTML — marked skipped`);
-          console.error(`❌ Backfill ${filename} (${uuid}): arweave returned HTML — marked skipped`);
-          continue;
-        }
-
-        const buffer = Buffer.from(await resp.arrayBuffer());
-        preserveOriginalFromBuffer(buffer, uuid);
+      const result = await tryDownload(txId, filename);
+      if (result) {
+        preserveOriginalFromBuffer(result.buffer, uuid);
         success++;
-        console.log(`✅ Backfilled ${filename} (${uuid}) — ${(buffer.length / 1024).toFixed(0)} KB`);
-      } catch (err) {
+        console.log(`✅ Backfilled ${filename} (${uuid}) — ${(result.buffer.length / 1024).toFixed(0)} KB via ${result.gateway}`);
+      } else {
+        markBackfillSkipped(uuid);
         failed++;
-        errors.push(`${filename || uuid}: ${err.message}`);
-        console.error(`❌ Backfill failed for ${filename || uuid}: ${err.message}`);
+        errors.push(`${filename || uuid}: all gateways failed`);
+        console.error(`❌ Backfill ${filename} (${uuid}): no gateway returned valid content — marked skipped`);
       }
     }
 

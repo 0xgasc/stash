@@ -624,6 +624,10 @@ function markBackfillSkipped(uuid) {
   _markBackfillSkipped.run(uuid);
 }
 
+function resetAllBackfillSkipped() {
+  return db.prepare('UPDATE uploads SET backfill_skipped = 0 WHERE backfill_skipped = 1').run().changes;
+}
+
 function getBackfillStats() {
   const { getOriginalPath } = require('./utils/originals');
   const all = db.prepare('SELECT uuid, backfill_skipped FROM uploads').all();
@@ -1595,6 +1599,7 @@ module.exports = {
   findStaleUploads,
   getUploadsWithoutOriginals,
   markBackfillSkipped,
+  resetAllBackfillSkipped,
   getBackfillStats,
   getExpiringUploads,
   updateGeo,
