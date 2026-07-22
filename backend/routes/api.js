@@ -95,6 +95,7 @@ router.post('/upload', requireApiKey, apiUploadLimiter, upload.single('file'), a
 
     console.log(`✅ API upload complete: ${result.url}`);
 
+    const stableUrl = `${req.protocol}://${req.get('host')}/f/${record.uuid}`;
     res.json({
       success: true,
       upload: {
@@ -107,6 +108,7 @@ router.post('/upload', requireApiKey, apiUploadLimiter, upload.single('file'), a
         irys_url: record.irys_url,
         arweave_id: record.arweave_id,
         ar_url: record.ar_url,
+        stable_url: stableUrl,
         reupload_token: record.reupload_token,
         reupload_url: `/api/v1/reupload/${record.reupload_token}`,
         created_at: record.created_at,

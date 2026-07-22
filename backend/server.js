@@ -302,9 +302,11 @@ app.post('/tus-upload/complete', async (req, res) => {
           if (fs.existsSync(metadataPath)) fs.unlinkSync(metadataPath);
         } catch { /* non-critical */ }
 
+        const stableUrl = `${req.protocol}://${req.get('host')}/f/${dbRecord.uuid}`;
         return res.json({
           success: true,
           url: result.url,
+          stableUrl,
           id: result.id,
           arUrl: result.arUrl,
           size: result.size || stat.size,
@@ -370,9 +372,11 @@ app.post('/tus-upload/complete', async (req, res) => {
       if (fs.existsSync(metadataPath)) fs.unlinkSync(metadataPath);
     } catch { /* non-critical */ }
 
+    const stableUrl = `${req.protocol}://${req.get('host')}/f/${dbRecord.uuid}`;
     res.json({
       success: true,
       url: result.url,
+      stableUrl,
       id: result.id,
       arUrl: result.arUrl,
       size: result.size,
