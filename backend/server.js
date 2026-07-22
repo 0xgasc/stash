@@ -126,7 +126,8 @@ async function initTusServer() {
 // =====================================================
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000')
   .split(',')
-  .map(s => s.trim());
+  .map(s => s.trim())
+  .filter(Boolean);
 
 app.use(cors({
   origin: allowedOrigins,
