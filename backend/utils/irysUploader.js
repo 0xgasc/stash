@@ -8,7 +8,7 @@
 const fs = require('fs');
 const crypto = require('crypto');
 
-const ARWEAVE_GATEWAY = 'https://arweave.net';
+const IRYS_GATEWAY = 'https://devnet.irys.xyz';
 
 const getContentType = (filename) => {
   const ext = (filename || '').toLowerCase().split('.').pop();
@@ -112,7 +112,7 @@ async function uploadFileToIrysFromPath(filePath, filename) {
     ],
   });
 
-  const url = `${ARWEAVE_GATEWAY}/${receipt.id}`;
+  const url = `${IRYS_GATEWAY}/${receipt.id}`;
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`✅ Irys upload complete in ${elapsed}s: ${url}`);
 

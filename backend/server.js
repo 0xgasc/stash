@@ -393,10 +393,10 @@ app.post('/tus-upload/complete', async (req, res) => {
 
 // =====================================================
 // STABLE PUBLIC REDIRECT
-// /f/:uuid → 302 to the upload's CURRENT gateway URL.
-// The re-upload cron rewrites uploads.irys_url in place, so this URL
-// survives every refresh cycle. 302 + no-store on purpose: a 301 would
-// be cached permanently and recreate the dead-link problem.
+// /f/:uuid → 302 to the gateway URL (chain-first).
+// Gateway serves from Arweave/Irys — free, permanent, decentralized.
+// Falls back to volume only if no gateway URL exists.
+// 302 + no-store so the redirect target can change without stale caches.
 // =====================================================
 app.get('/f/:uuid', (req, res) => {
   const { uuid } = req.params;
@@ -404,6 +404,10 @@ app.get('/f/:uuid', (req, res) => {
   const upload = getUploadById(uuid);
   if (!upload) return res.status(404).send('Not found');
   res.set('Access-Control-Allow-Origin', '*');
+  if (upload.irys_url) {
+    res.set('Cache-Control', 'no-store');
+    return res.redirect(302, upload.irys_url);
+  }
   const { getOriginalPath } = require('./utils/originals');
   const filePath = getOriginalPath(uuid);
   if (filePath) {
@@ -411,9 +415,7 @@ app.get('/f/:uuid', (req, res) => {
     res.set('Cache-Control', 'public, max-age=31536000, immutable');
     return fs.createReadStream(filePath).pipe(res);
   }
-  if (!upload.irys_url) return res.status(404).send('Not found');
-  res.set('Cache-Control', 'no-store');
-  res.redirect(302, upload.irys_url);
+  return res.status(404).send('Not found');
 });
 
 // GET /f/:uuid/raw — serve the original file directly from the volume.
