@@ -57,7 +57,14 @@ ALTER TABLE uploads ADD COLUMN storage_class TEXT NOT NULL DEFAULT 'internal'
   CHECK (storage_class IN ('temp','permanent','internal'));
 ALTER TABLE uploads ADD COLUMN expires_at TEXT;         -- temp only
 ALTER TABLE uploads ADD COLUMN expired INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE uploads ADD COLUMN permanent_at TEXT;       -- when the file became
+  -- permanent: upload time for direct permanent uploads, promotion time for
+  -- promoted files. ALL monthly-allowance sums use permanent_at, NOT
+  -- created_at — a file promoted in month N+1 counts against month N+1's
+  -- allowance even though it was uploaded in month N.
 CREATE INDEX idx_uploads_class ON uploads(storage_class, expires_at);
+CREATE INDEX idx_uploads_permanent_at ON uploads(user_id, permanent_at)
+  WHERE permanent_at IS NOT NULL;
 
 ALTER TABLE plans ADD COLUMN storage_class TEXT NOT NULL DEFAULT 'temp'
   CHECK (storage_class IN ('temp','permanent'));
@@ -101,12 +108,19 @@ Class resolution at upload time (both TUS `/complete` and `/api/v1/upload`):
 
 Quota check (in `utils/quota.js`, *before* the chain upload):
 
-- `permanent`: `SUM(size) of this user's permanent uploads this calendar month`
-  + incoming size ≤ plan's `monthly_storage_bytes` (or lifetime total vs
-  `total_storage_bytes` for one_time plans). Reject with a clear
-  "storage allowance exceeded" error.
-- `temp`: existing count-based daily/monthly limits stay.
+- `permanent`: `SUM(size) WHERE storage_class='permanent' AND permanent_at in
+  the current calendar month` + incoming size ≤ plan's `monthly_storage_bytes`
+  (or lifetime `SUM` vs `total_storage_bytes` for one_time plans). Reject with
+  a clear "storage allowance exceeded" error. The sum is over **permanent_at**
+  (see schema) so promotions are attributed to the month they were promoted.
+- `temp`: count-based limits of the **free default plan** (Drift: 3/day,
+  10/month) apply to temp uploads regardless of the uploader's plan — a paid
+  user's temp uploads follow free-tier rules in both directions (no GB
+  deduction, but also free-tier counts).
 - `internal`: no quota.
+- Paid plans stop using `monthly_upload_limit` for permanent uploads: the v13
+  seed sets `monthly_upload_limit = NULL` on Signal/Beacon/Archive so byte
+  allowances are the only permanent meter (no double-limiting).
 
 Volume originals are still preserved for **every** class — the volume remains
 the serving cache and the source for promotions/refreshes.
@@ -139,14 +153,18 @@ the serving cache and the source for promotions/refreshes.
   paid plan; user selects files to promote.
 - Backend `POST /api/v1/me/promote` with upload uuids: for each, re-upload the
   volume original to mainnet → new `arweave_id`/`irys_url`, class →
-  `permanent`, `expires_at` cleared; bytes count against the monthly allowance
-  (same quota check as uploads, atomically per batch).
+  `permanent`, `expires_at` cleared, **`permanent_at` set to now** (so the
+  bytes are attributed to the promotion month's allowance); same quota check
+  as uploads, atomically per batch.
 - Admin equivalent: `POST /api/v1/admin/promote` (any file, optionally
   bypassing quota) — doubles as the bulk-promote tool for internal files.
 
 ## Admin
 
 - `storage_class` filter parameter on every admin/uploads listing endpoint.
+  Note: the operator listing endpoints live in `backend/routes/api.js`
+  (`GET /api/v1/uploads`, `/uploads/expiring`, `/stats`), not `routes/admin.js`
+  — most of this work lands there.
 - Stats endpoint gains per-class breakdowns: count, total bytes, and
   current-month permanent bytes (the operator's real spend proxy).
 - Bulk reclassify endpoint (e.g. mark a set of files internal).
@@ -177,7 +195,10 @@ the serving cache and the source for promotions/refreshes.
 
 1. Ship migration + class-aware pipeline with mainnet uploads **feature-flagged
    off** (env `MAINNET_UPLOADS_ENABLED=0`) until the mainnet wallet is funded
-   and a test upload is verified end-to-end.
+   and a test upload is verified end-to-end. While the flag is off, a
+   permanent-class upload **fails closed** with a specific "permanent storage
+   not yet available" error — it is never silently downgraded to devnet
+   (consistent with Error handling).
 2. Fund mainnet wallet, verify one real permanent upload, flip the flag.
 3. Frontend: pricing page copy update (temp vs forever), upload toggle,
    promotion picker, expired-file page.
