@@ -100,11 +100,13 @@ router.post('/upload', requireApiKey, apiUploadLimiter, upload.single('file'), a
       success: true,
       upload: {
         uuid: record.uuid,
+        url: stableUrl,
         filename: record.filename,
         size: record.size,
         content_type: record.content_type,
         source: record.source,
         description: record.description,
+        gateway_url: record.irys_url,
         irys_url: record.irys_url,
         arweave_id: record.arweave_id,
         ar_url: record.ar_url,

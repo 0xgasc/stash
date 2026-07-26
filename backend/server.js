@@ -306,7 +306,8 @@ app.post('/tus-upload/complete', async (req, res) => {
         const stableUrl = `${req.protocol}://${req.get('host')}/f/${dbRecord.uuid}`;
         return res.json({
           success: true,
-          url: result.url,
+          url: stableUrl,
+          gatewayUrl: result.url,
           stableUrl,
           id: result.id,
           arUrl: result.arUrl,
@@ -376,7 +377,8 @@ app.post('/tus-upload/complete', async (req, res) => {
     const stableUrl = `${req.protocol}://${req.get('host')}/f/${dbRecord.uuid}`;
     res.json({
       success: true,
-      url: result.url,
+      url: stableUrl,
+      gatewayUrl: result.url,
       stableUrl,
       id: result.id,
       arUrl: result.arUrl,
@@ -409,16 +411,16 @@ app.get('/f/:uuid', (req, res) => {
   const upload = getUploadById(uuid);
   if (!upload) return res.status(404).send('Not found');
   res.set('Access-Control-Allow-Origin', '*');
-  if (upload.irys_url) {
-    res.set('Cache-Control', 'no-store');
-    return res.redirect(302, upload.irys_url);
-  }
   const { getOriginalPath } = require('./utils/originals');
   const filePath = getOriginalPath(uuid);
   if (filePath) {
     res.set('Content-Type', upload.content_type || 'application/octet-stream');
-    res.set('Cache-Control', 'public, max-age=31536000, immutable');
+    res.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
     return fs.createReadStream(filePath).pipe(res);
+  }
+  if (upload.irys_url) {
+    res.set('Cache-Control', 'no-store');
+    return res.redirect(302, upload.irys_url);
   }
   return res.status(404).send('Not found');
 });
