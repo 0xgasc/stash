@@ -169,4 +169,21 @@ router.post('/backfill', async (req, res) => {
   res.json({ reset_count: reset, stats, message: 'Backfill triggered in background' });
 });
 
+// =====================================================
+// POST /refresh — Trigger a devnet refresh run now
+// GET  /refresh — How many uploads are past the refresh threshold
+// =====================================================
+router.get('/refresh', (req, res) => {
+  const { findStaleUploads } = require('../db');
+  const days = parseInt(process.env.REFRESH_AFTER_DAYS || '20', 10);
+  const stale = findStaleUploads({ olderThanDays: days, limit: 1000 });
+  res.json({ threshold_days: days, stale_count: stale.length });
+});
+
+router.post('/refresh', (req, res) => {
+  const { runOnce } = require('../cron/refreshDevnet');
+  runOnce().catch((err) => console.error('Manual refresh error:', err));
+  res.json({ message: 'Refresh triggered in background' });
+});
+
 module.exports = router;

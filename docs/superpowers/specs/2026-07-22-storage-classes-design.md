@@ -137,8 +137,14 @@ the serving cache and the source for promotions/refreshes.
 ## Crons
 
 1. **Refresh cron** (revival of the original re-upload strategy):
-   `internal` only. Re-uploads to devnet from the volume original before the
-   ~60-day eviction, writes a new `upload_links` row, updates `irys_url`.
+   `internal` only. Re-uploads any file whose latest link is older than
+   **20 days** (`REFRESH_AFTER_DAYS=20`, GS decision 2026-07-27) to devnet
+   from the volume original, writes a new `upload_links` row, updates
+   `irys_url`. Built ahead of the rest of this spec (2026-07-27,
+   `backend/cron/refreshDevnet.js`) covering all uploads; scope it to
+   `internal` when v13 lands. Also applies to `temp` files implicitly —
+   they expire at 30 days but devnet holds ~60, so temp files never need
+   refreshing.
 2. **Expiry cron** (new, hourly): `temp` rows with `expires_at < now AND
    expired = 0` → set `expired = 1`, delete volume original. Keep the DB row
    for admin history.

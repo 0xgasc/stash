@@ -25,6 +25,7 @@ const apiRoutes = require('./routes/api');
 const { getClientInfo } = require('./utils/clientInfo');
 const { scheduleGeoLookup } = require('./utils/geo');
 const { startReuploadCron } = require('./cron/reuploadStale');
+const { startRefreshCron } = require('./cron/refreshDevnet');
 const { startAlertCron } = require('./cron/alerts');
 const { addUploadToFolder, getFolderById, getInboxFolder } = require('./db');
 const { isSafeTusId, sanitizeFilename } = require('./utils/sanitize');
@@ -500,5 +501,6 @@ app.listen(PORT, () => {
   console.log(`🚀 Stash upload server running on port ${PORT}`);
   console.log(`   Allowed origins: ${allowedOrigins.join(', ')}`);
   startReuploadCron();
+  startRefreshCron();
   startAlertCron();
 });
