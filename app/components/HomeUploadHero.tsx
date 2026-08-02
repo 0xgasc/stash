@@ -9,6 +9,7 @@ import { useAuth } from './AuthProvider'
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
 interface UploadResult {
+  uuid: string
   url: string
   claimToken: string | null
   filename: string
@@ -213,6 +214,7 @@ export default function HomeUploadHero() {
               }
 
               resolve({
+                uuid: data.uuid,
                 url: data.url,
                 claimToken: null,
                 filename: data.filename,
@@ -279,8 +281,9 @@ export default function HomeUploadHero() {
   }
 
   const copyToClipboard = async () => {
-    if (uploadResult?.url) {
-      await navigator.clipboard.writeText(uploadResult.url)
+    if (uploadResult?.uuid) {
+      const viewUrl = `${window.location.origin}/view/${uploadResult.uuid}`
+      await navigator.clipboard.writeText(viewUrl)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     }
@@ -358,6 +361,8 @@ export default function HomeUploadHero() {
 
   // Upload complete state
   if (uploadResult) {
+    const viewUrl = `/view/${uploadResult.uuid}`
+
     return (
       <div className="max-w-2xl mx-auto">
         <div className="bg-black p-8 border-2 border-accent-cyan shadow-brutal">
@@ -378,11 +383,11 @@ export default function HomeUploadHero() {
 
           {/* URL Display */}
           <div className="bg-gray-950 border border-gray-800 p-4 mb-6">
-            <div className="text-accent-cyan text-xs mb-2 uppercase tracking-wider">Permanent URL</div>
+            <div className="text-accent-cyan text-xs mb-2 uppercase tracking-wider">Your file</div>
             <div className="flex items-center gap-3">
               <input
                 type="text"
-                value={uploadResult.url}
+                value={`${window.location.origin}${viewUrl}`}
                 readOnly
                 className="flex-1 bg-transparent text-white text-sm truncate outline-none"
               />
@@ -394,7 +399,7 @@ export default function HomeUploadHero() {
                 {copied ? 'Copied' : 'Copy'}
               </button>
               <a
-                href={uploadResult.url}
+                href={viewUrl}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="flex items-center gap-2 bg-accent-cyan hover:bg-cyan-300 text-black px-3 py-2 text-sm transition-colors font-bold"
