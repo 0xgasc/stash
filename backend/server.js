@@ -426,6 +426,25 @@ app.get('/f/:uuid', (req, res) => {
   return res.status(404).send('Not found');
 });
 
+// GET /f/:uuid/meta — public JSON metadata for the viewer page.
+app.get('/f/:uuid/meta', (req, res) => {
+  const { uuid } = req.params;
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).json({ error: 'Invalid id' });
+  const upload = getUploadById(uuid);
+  if (!upload) return res.status(404).json({ error: 'Not found' });
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Cache-Control', 'public, max-age=60');
+  res.json({
+    uuid: upload.uuid,
+    filename: upload.filename,
+    content_type: upload.content_type,
+    size: upload.size,
+    title: upload.title || null,
+    caption: upload.caption || null,
+    created_at: upload.created_at,
+  });
+});
+
 // GET /f/:uuid/raw — serve the original file directly from the volume.
 // Bypasses the gateway redirect so files load even when devnet is down.
 app.get('/f/:uuid/raw', (req, res) => {
