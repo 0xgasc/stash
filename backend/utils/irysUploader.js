@@ -73,22 +73,32 @@ async function getIrysUploader() {
  * @param {string} filename - Original filename (for metadata tags)
  * @returns {Promise<{url: string, id: string, arUrl: string, size: number, contentType: string, filename: string}>}
  */
+function streamMd5(filePath) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash('md5');
+    const stream = fs.createReadStream(filePath);
+    stream.on('data', (chunk) => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+    stream.on('error', reject);
+  });
+}
+
 async function uploadFileToIrysFromPath(filePath, filename) {
   console.log(`📤 Irys upload starting: ${filename}`);
   const startTime = Date.now();
 
-  const buffer = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
   const contentType = getContentType(filename);
-  const hash = crypto.createHash('md5').update(buffer).digest('hex');
+  const hash = await streamMd5(filePath);
 
-  console.log(`   - Size: ${(buffer.length / 1024 / 1024).toFixed(2)} MB`);
+  console.log(`   - Size: ${(fileSize / 1024 / 1024).toFixed(2)} MB`);
   console.log(`   - Content-Type: ${contentType}`);
   console.log(`   - MD5: ${hash}`);
 
   const uploader = await getIrysUploader();
 
-  // Check balance
-  const price = await uploader.getPrice(buffer.length);
+  const price = await uploader.getPrice(fileSize);
   const balance = await uploader.getBalance();
 
   if (BigInt(balance.toString()) < BigInt(price.toString())) {
@@ -100,12 +110,11 @@ async function uploadFileToIrysFromPath(filePath, filename) {
   console.log(`   - Price: ${price.toString()} wei`);
   console.log(`   - Balance: ${balance.toString()} wei`);
 
-  // Upload with metadata tags
-  const receipt = await uploader.upload(buffer, {
+  const receipt = await uploader.uploadFile(filePath, {
     tags: [
       { name: 'Content-Type', value: contentType },
       { name: 'Filename', value: filename },
-      { name: 'Original-Size', value: buffer.length.toString() },
+      { name: 'Original-Size', value: fileSize.toString() },
       { name: 'Original-MD5', value: hash },
       { name: 'Upload-Timestamp', value: new Date().toISOString() },
       { name: 'Application', value: 'Stash' },
@@ -120,7 +129,7 @@ async function uploadFileToIrysFromPath(filePath, filename) {
     url,
     id: receipt.id,
     arUrl: `ar://${receipt.id}`,
-    size: buffer.length,
+    size: fileSize,
     contentType,
     filename,
     priceWei: price.toString(),
