@@ -36,17 +36,27 @@ export async function GET(
       redirect: 'manual',
       cache: 'no-store',
     })
+
     const location = res.headers.get('location')
-    if (!location) {
-      return new NextResponse('Not found', { status: 404 })
+    if (location) {
+      return NextResponse.redirect(location, {
+        status: 302,
+        headers: { 'Cache-Control': 'no-store', ...CORS_HEADERS },
+      })
     }
-    return NextResponse.redirect(location, {
-      status: 302,
-      headers: {
-        'Cache-Control': 'no-store',
-        ...CORS_HEADERS,
-      },
-    })
+
+    if (res.ok && res.body) {
+      return new NextResponse(res.body, {
+        status: 200,
+        headers: {
+          'Content-Type': res.headers.get('content-type') || 'application/octet-stream',
+          'Cache-Control': res.headers.get('cache-control') || 'public, max-age=86400',
+          ...CORS_HEADERS,
+        },
+      })
+    }
+
+    return new NextResponse('Not found', { status: 404 })
   } catch {
     return new NextResponse('Temporarily unavailable', { status: 503 })
   }
