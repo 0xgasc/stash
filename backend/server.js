@@ -31,6 +31,7 @@ const { addUploadToFolder, getFolderById, getInboxFolder } = require('./db');
 const { isSafeTusId, sanitizeFilename } = require('./utils/sanitize');
 const { checkUploadQuota } = require('./utils/quota');
 const { preserveOriginal } = require('./utils/originals');
+const { optimizeAndUpload } = require('./utils/videoOptimize');
 
 const TRUSTED_HEADER = 'x-admin-secret';
 const ADMIN_BACKEND_SECRET = process.env.ADMIN_BACKEND_SECRET;
@@ -305,7 +306,7 @@ app.post('/tus-upload/complete', async (req, res) => {
         } catch { /* non-critical */ }
 
         const stableUrl = `${req.protocol}://${req.get('host')}/f/${dbRecord.uuid}`;
-        return res.json({
+        res.json({
           success: true,
           url: stableUrl,
           gatewayUrl: result.url,
@@ -318,6 +319,12 @@ app.post('/tus-upload/complete', async (req, res) => {
           uuid: dbRecord.uuid,
           reuploadToken: dbRecord.reupload_token,
         });
+
+        if (result.contentType && result.contentType.startsWith('video/')) {
+          optimizeAndUpload(dbRecord.uuid, result.contentType, result.filename)
+            .catch(err => console.error(`⚠️ Background video optimize failed: ${err.message}`));
+        }
+        return;
       }
 
       // List files in tus directory for debugging
@@ -389,6 +396,12 @@ app.post('/tus-upload/complete', async (req, res) => {
       uuid: dbRecord.uuid,
       reuploadToken: dbRecord.reupload_token,
     });
+
+    // Fire-and-forget: optimize video for web streaming (faststart)
+    if (result.contentType && result.contentType.startsWith('video/')) {
+      optimizeAndUpload(dbRecord.uuid, result.contentType, result.filename)
+        .catch(err => console.error(`⚠️ Background video optimize failed: ${err.message}`));
+    }
   } catch (error) {
     console.error('❌ Tus completion error:', error);
     console.error('   Stack:', error.stack);
@@ -434,7 +447,7 @@ app.get('/f/:uuid/meta', (req, res) => {
   if (!upload) return res.status(404).json({ error: 'Not found' });
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Cache-Control', 'public, max-age=60');
-  const contentUrl = upload.irys_url || `${req.protocol}://${req.get('host')}/f/${upload.uuid}/raw`;
+  const contentUrl = upload.stream_url || upload.irys_url || `${req.protocol}://${req.get('host')}/f/${upload.uuid}/raw`;
   res.json({
     uuid: upload.uuid,
     filename: upload.filename,

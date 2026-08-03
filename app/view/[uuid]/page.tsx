@@ -4,6 +4,7 @@ import { Download, ExternalLink } from 'lucide-react'
 import { backendJson } from '@/app/lib/backend'
 import NavBar from '@/app/components/NavBar'
 import CopyLinkButton from './CopyLinkButton'
+import VideoPlayer from './VideoPlayer'
 
 interface FileMeta {
   uuid: string
@@ -93,13 +94,7 @@ export default async function ViewPage({
               />
             </div>
           ) : isVideo(f.content_type) ? (
-            <video
-              src={srcUrl}
-              controls
-              autoPlay={false}
-              preload="none"
-              className="w-full max-h-[70vh] bg-black"
-            />
+            <VideoPlayer src={srcUrl} size={f.size} />
           ) : isAudio(f.content_type) ? (
             <div className="flex flex-col items-center justify-center p-12 gap-6">
               <div className="w-24 h-24 border border-gray-700 flex items-center justify-center">

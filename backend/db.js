@@ -397,6 +397,12 @@ migrate(12, 'backfill_skipped flag for unrecoverable uploads', () => {
   `);
 });
 
+migrate(13, 'stream_url for web-optimized video', () => {
+  db.exec(`
+    ALTER TABLE uploads ADD COLUMN stream_url TEXT;
+  `);
+});
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================

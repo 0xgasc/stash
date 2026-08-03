@@ -186,4 +186,21 @@ router.post('/refresh', (req, res) => {
   res.json({ message: 'Refresh triggered in background' });
 });
 
+// POST /optimize/:uuid — Trigger video optimization for an existing upload
+router.post('/optimize/:uuid', async (req, res) => {
+  const { getUploadById } = require('../db');
+  const { optimizeAndUpload } = require('../utils/videoOptimize');
+  const upload = getUploadById(req.params.uuid);
+  if (!upload) return res.status(404).json({ error: 'not_found' });
+  if (!upload.content_type?.startsWith('video/')) {
+    return res.status(400).json({ error: 'not_a_video' });
+  }
+  if (upload.stream_url) {
+    return res.json({ message: 'already_optimized', stream_url: upload.stream_url });
+  }
+  optimizeAndUpload(upload.uuid, upload.content_type, upload.filename)
+    .catch(err => console.error(`⚠️ Admin optimize failed: ${err.message}`));
+  res.json({ message: 'Optimization triggered in background' });
+});
+
 module.exports = router;
