@@ -97,8 +97,8 @@ export default async function ViewPage({
               src={srcUrl}
               controls
               autoPlay={false}
-              preload="metadata"
-              className="w-full max-h-[70vh]"
+              preload="none"
+              className="w-full max-h-[70vh] bg-black"
             />
           ) : isAudio(f.content_type) ? (
             <div className="flex flex-col items-center justify-center p-12 gap-6">
