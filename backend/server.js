@@ -434,6 +434,7 @@ app.get('/f/:uuid/meta', (req, res) => {
   if (!upload) return res.status(404).json({ error: 'Not found' });
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Cache-Control', 'public, max-age=60');
+  const contentUrl = upload.irys_url || `${req.protocol}://${req.get('host')}/f/${upload.uuid}/raw`;
   res.json({
     uuid: upload.uuid,
     filename: upload.filename,
@@ -442,6 +443,7 @@ app.get('/f/:uuid/meta', (req, res) => {
     title: upload.title || null,
     caption: upload.caption || null,
     created_at: upload.created_at,
+    content_url: contentUrl,
   });
 });
 

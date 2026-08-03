@@ -13,6 +13,7 @@ interface FileMeta {
   title: string | null
   caption: string | null
   created_at: string
+  content_url: string
 }
 
 export const revalidate = 60
@@ -73,7 +74,7 @@ export default async function ViewPage({
   if (!res.ok || !res.data) notFound()
   const f = res.data
   const name = f.title || f.filename
-  const srcUrl = `/f/${f.uuid}`
+  const srcUrl = f.content_url
 
   return (
     <div className="min-h-screen bg-black">
