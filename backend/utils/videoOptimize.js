@@ -60,9 +60,7 @@ async function optimizeAndUpload(uuid, contentType, filename) {
 
     db.prepare('UPDATE uploads SET stream_url = ? WHERE uuid = ?').run(result.url, uuid);
     console.log(`🎬 Stream URL saved for ${uuid}: ${result.url}`);
-
-    // Clean up optimized temp file
-    try { fs.unlinkSync(outPath); } catch {}
+    console.log(`🎬 Optimized file kept at ${outPath} for Range-based streaming`);
 
     return result.url;
   } catch (err) {

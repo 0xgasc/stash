@@ -23,7 +23,7 @@ export async function OPTIONS() {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ uuid: string }> }
 ) {
   const { uuid } = await params
@@ -32,9 +32,14 @@ export async function GET(
   }
 
   try {
+    const headers: Record<string, string> = {}
+    const range = req.headers.get('range')
+    if (range) headers['Range'] = range
+
     const res = await fetch(`${UPLOAD_SERVER}/f/${uuid}`, {
       redirect: 'manual',
       cache: 'no-store',
+      headers,
     })
 
     const location = res.headers.get('location')
@@ -45,14 +50,21 @@ export async function GET(
       })
     }
 
-    if (res.ok && res.body) {
+    if ((res.ok || res.status === 206) && res.body) {
+      const respHeaders: Record<string, string> = {
+        'Content-Type': res.headers.get('content-type') || 'application/octet-stream',
+        'Cache-Control': res.headers.get('cache-control') || 'public, max-age=86400',
+        'Accept-Ranges': 'bytes',
+        ...CORS_HEADERS,
+      }
+      const contentRange = res.headers.get('content-range')
+      if (contentRange) respHeaders['Content-Range'] = contentRange
+      const contentLength = res.headers.get('content-length')
+      if (contentLength) respHeaders['Content-Length'] = contentLength
+
       return new NextResponse(res.body, {
-        status: 200,
-        headers: {
-          'Content-Type': res.headers.get('content-type') || 'application/octet-stream',
-          'Cache-Control': res.headers.get('cache-control') || 'public, max-age=86400',
-          ...CORS_HEADERS,
-        },
+        status: res.status,
+        headers: respHeaders,
       })
     }
 

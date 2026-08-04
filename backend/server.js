@@ -412,6 +412,33 @@ app.post('/tus-upload/complete', async (req, res) => {
   }
 });
 
+// Range-aware file streaming (Safari requires HTTP 206 for video playback)
+function serveFileWithRange(req, res, filePath, contentType, cacheControl) {
+  const stat = fs.statSync(filePath);
+  const fileSize = stat.size;
+  res.set('Accept-Ranges', 'bytes');
+  res.set('Content-Type', contentType);
+  res.set('Cache-Control', cacheControl);
+
+  const range = req.headers.range;
+  if (range) {
+    const parts = range.replace(/bytes=/, '').split('-');
+    const start = parseInt(parts[0], 10);
+    const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+    if (start >= fileSize || end >= fileSize || start > end) {
+      res.status(416).set('Content-Range', `bytes */${fileSize}`).end();
+      return;
+    }
+    res.status(206);
+    res.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
+    res.set('Content-Length', end - start + 1);
+    fs.createReadStream(filePath, { start, end }).pipe(res);
+  } else {
+    res.set('Content-Length', fileSize);
+    fs.createReadStream(filePath).pipe(res);
+  }
+}
+
 // =====================================================
 // STABLE PUBLIC REDIRECT
 // /f/:uuid → 302 to the gateway URL (chain-first).
@@ -425,12 +452,13 @@ app.get('/f/:uuid', (req, res) => {
   const upload = getUploadById(uuid);
   if (!upload) return res.status(404).send('Not found');
   res.set('Access-Control-Allow-Origin', '*');
-  const { getOriginalPath } = require('./utils/originals');
-  const filePath = getOriginalPath(uuid);
+  const { getOriginalPath, getOptimizedPath } = require('./utils/originals');
+  const optimized = getOptimizedPath(uuid);
+  const filePath = optimized || getOriginalPath(uuid);
   if (filePath) {
-    res.set('Content-Type', upload.content_type || 'application/octet-stream');
-    res.set('Cache-Control', 'public, max-age=86400, stale-while-revalidate=604800');
-    return fs.createReadStream(filePath).pipe(res);
+    const ct = optimized ? 'video/mp4' : (upload.content_type || 'application/octet-stream');
+    return serveFileWithRange(req, res, filePath, ct,
+      'public, max-age=86400, stale-while-revalidate=604800');
   }
   if (upload.irys_url) {
     res.set('Cache-Control', 'no-store');
@@ -440,6 +468,8 @@ app.get('/f/:uuid', (req, res) => {
 });
 
 // GET /f/:uuid/meta — public JSON metadata for the viewer page.
+// Prefers backend /f/:uuid/raw for videos (supports Range requests Safari needs)
+// over Irys gateway URLs (307 redirects break Safari <video>).
 app.get('/f/:uuid/meta', (req, res) => {
   const { uuid } = req.params;
   if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).json({ error: 'Invalid id' });
@@ -447,7 +477,16 @@ app.get('/f/:uuid/meta', (req, res) => {
   if (!upload) return res.status(404).json({ error: 'Not found' });
   res.set('Access-Control-Allow-Origin', '*');
   res.set('Cache-Control', 'public, max-age=60');
-  const contentUrl = upload.stream_url || upload.irys_url || `${req.protocol}://${req.get('host')}/f/${upload.uuid}/raw`;
+  const baseUrl = `${req.protocol}://${req.get('host')}`;
+  const isVideo = upload.content_type && upload.content_type.startsWith('video/');
+  const { getOriginalPath, getOptimizedPath } = require('./utils/originals');
+  const hasLocal = !!getOptimizedPath(upload.uuid) || !!getOriginalPath(upload.uuid);
+  let contentUrl;
+  if (isVideo && hasLocal) {
+    contentUrl = `${baseUrl}/f/${upload.uuid}/raw`;
+  } else {
+    contentUrl = upload.stream_url || upload.irys_url || `${baseUrl}/f/${upload.uuid}/raw`;
+  }
   res.json({
     uuid: upload.uuid,
     filename: upload.filename,
@@ -460,21 +499,21 @@ app.get('/f/:uuid/meta', (req, res) => {
   });
 });
 
-// GET /f/:uuid/raw — serve the original file directly from the volume.
-// Bypasses the gateway redirect so files load even when devnet is down.
+// GET /f/:uuid/raw — serve the file directly from the volume.
+// Prefers optimized (faststart) version for videos. Supports Range requests.
 app.get('/f/:uuid/raw', (req, res) => {
   const { uuid } = req.params;
   if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).send('Invalid id');
   const upload = getUploadById(uuid);
   if (!upload) return res.status(404).send('Not found');
-  const { getOriginalPath } = require('./utils/originals');
-  const filePath = getOriginalPath(uuid);
+  const { getOriginalPath, getOptimizedPath } = require('./utils/originals');
+  const optimized = getOptimizedPath(uuid);
+  const filePath = optimized || getOriginalPath(uuid);
   if (!filePath) return res.status(404).send('Original not preserved');
   res.set('Access-Control-Allow-Origin', '*');
-  res.set('Content-Type', upload.content_type || 'application/octet-stream');
+  const ct = optimized ? 'video/mp4' : (upload.content_type || 'application/octet-stream');
   res.set('Content-Disposition', `inline; filename="${upload.filename || uuid}"`);
-  res.set('Cache-Control', 'public, max-age=31536000, immutable');
-  fs.createReadStream(filePath).pipe(res);
+  serveFileWithRange(req, res, filePath, ct, 'public, max-age=31536000, immutable');
 });
 
 // =====================================================

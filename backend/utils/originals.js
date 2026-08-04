@@ -49,4 +49,11 @@ function preserveOriginalFromBuffer(buffer, uuid) {
   fs.writeFileSync(dest, buffer);
 }
 
-module.exports = { preserveOriginal, preserveOriginalFromBuffer, getOriginalPath, ORIGINALS_DIR };
+const OPTIMIZED_DIR = path.join(path.dirname(DB_PATH), 'optimized');
+
+function getOptimizedPath(uuid) {
+  const p = path.join(OPTIMIZED_DIR, `${uuid}.mp4`);
+  return fs.existsSync(p) ? p : null;
+}
+
+module.exports = { preserveOriginal, preserveOriginalFromBuffer, getOriginalPath, getOptimizedPath, ORIGINALS_DIR };
