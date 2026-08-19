@@ -136,9 +136,11 @@ export default function MeUploadCard({
     if (f) upload(f)
   }
 
+  const getViewUrl = () => result ? `${window.location.origin}/view/${result.uuid}` : ''
+
   const copyUrl = async () => {
     if (!result) return
-    await navigator.clipboard.writeText(result.url)
+    await navigator.clipboard.writeText(getViewUrl())
     setCopied(true)
     setTimeout(() => setCopied(false), 2000)
   }
@@ -170,11 +172,11 @@ export default function MeUploadCard({
             <CheckCircle className="w-4 h-4" /> {t('me.upload_complete', { filename: result.filename, size: formatBytes(result.size) })}
           </div>
           <div className="flex items-center gap-2 bg-gray-950 border border-gray-800 p-2">
-            <input type="text" value={result.url} readOnly className="flex-1 bg-transparent text-gray-300 text-xs outline-none font-mono" />
+            <input type="text" value={getViewUrl()} readOnly className="flex-1 bg-transparent text-gray-300 text-xs outline-none font-mono" />
             <button onClick={copyUrl} className="flex items-center gap-1 text-gray-400 hover:text-white text-xs px-2">
               <Copy className="w-3 h-3" /> {copied ? t('me.upload_copied') : t('me.upload_copy')}
             </button>
-            <a href={result.url} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-white px-2">
+            <a href={`/view/${result.uuid}`} target="_blank" rel="noopener noreferrer" className="text-gray-400 hover:text-white px-2">
               <ExternalLink className="w-3 h-3" />
             </a>
           </div>
