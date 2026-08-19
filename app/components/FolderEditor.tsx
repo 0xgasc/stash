@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import {
   Loader2, Save, Trash2, ExternalLink, Plus, X, Eye, EyeOff, Lock, AlertTriangle, Inbox,
-  Shield, Mail, KeyRound,
+  Shield, Mail, KeyRound, Play,
 } from 'lucide-react'
 import { useI18n } from '@/app/lib/i18n/client'
 
@@ -487,11 +487,18 @@ function FileRow({ upload, action, actionIcon, actionLabel, busy }: {
   actionLabel: string
   busy: boolean
 }) {
+  const isPreviewable = /^(image|video|audio)\//.test(upload.content_type) || upload.content_type === 'application/pdf'
   return (
     <div className="flex items-center gap-3 py-2 px-2 hover:bg-gray-900/50 rounded text-sm">
       <span className="text-white truncate flex-1">{upload.filename}</span>
       <span className="text-gray-600 text-xs">{formatBytes(upload.size)}</span>
       <span className="text-gray-700 text-xs font-mono">{upload.content_type}</span>
+      {isPreviewable && (
+        <a href={`/view/${upload.uuid}`} target="_blank" rel="noopener noreferrer" className="text-accent-cyan hover:text-white flex items-center gap-1 text-xs">
+          <Play className="w-3 h-3" />
+          Preview
+        </a>
+      )}
       <a href={upload.irys_url} target="_blank" rel="noopener noreferrer" className="text-gray-600 hover:text-white">
         <ExternalLink className="w-3 h-3" />
       </a>
