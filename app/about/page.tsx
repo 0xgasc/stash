@@ -1,27 +1,14 @@
 import Link from 'next/link'
 import { Shield, Clock, Globe, Server, Lock, Zap } from 'lucide-react'
 import { getServerT } from '@/app/lib/i18n/server'
+import NavBar from '@/app/components/NavBar'
 
 export default async function AboutPage() {
   const { t } = await getServerT(null)
 
   return (
     <div className="min-h-screen bg-black">
-      <header className="container mx-auto px-4 py-6">
-        <nav className="flex justify-between items-center">
-          <Link href="/" className="text-xl font-bold text-accent-cyan text-glow tracking-widest uppercase">
-            Stash
-          </Link>
-          <div className="flex items-center gap-6 text-sm">
-            <Link href="/pricing" className="text-gray-500 hover:text-accent-cyan transition-colors">
-              {t('about.nav_pricing')}
-            </Link>
-            <Link href="/auth" className="text-gray-500 hover:text-accent-cyan transition-colors">
-              {t('about.nav_signin')}
-            </Link>
-          </div>
-        </nav>
-      </header>
+      <NavBar />
 
       <main className="container mx-auto px-4 py-16 max-w-3xl">
         {/* Hero */}
@@ -146,11 +133,11 @@ export default async function AboutPage() {
       </main>
 
       <footer className="container mx-auto px-4 py-12 border-t border-gray-900">
-        <div className="flex justify-between items-center text-sm text-gray-600">
-          <div>Arweave + Irys</div>
+        <div className="flex flex-col sm:flex-row justify-between items-center gap-4 text-xs text-gray-600 tracking-wide">
+          <div className="uppercase">Powered by Arweave &amp; Irys</div>
           <div className="flex gap-6">
-            <Link href="/" className="hover:text-gray-400">Upload</Link>
-            <Link href="/pricing" className="hover:text-gray-400">{t('about.nav_pricing')}</Link>
+            <Link href="/" className="hover:text-accent-cyan transition-colors">Upload</Link>
+            <Link href="/pricing" className="hover:text-accent-cyan transition-colors">{t('about.nav_pricing')}</Link>
           </div>
         </div>
       </footer>

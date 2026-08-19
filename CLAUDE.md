@@ -13,8 +13,9 @@ Browser → Next.js (Vercel)  → Express backend (Railway) → SQLite (Railway 
 - **Frontend**: Next.js App Router, deployed on Vercel as project `aeter`
 - **Backend**: Express + better-sqlite3, deployed on Railway as service `stash`
 - **Storage**: Arweave via Irys SDK (permanent, blockchain-based)
-- **Auth**: Own magic-link system via Resend (not Supabase)
+- **Auth**: Own magic-link system via Resend (no Supabase, no @vercel/kv)
 - **Payments**: Stripe (cards), Recurrente (GT/LATAM), StablePay widget v3 (crypto/USDC)
+- **Video**: ffmpeg faststart optimization, Range-aware streaming (Safari compat), optimized copies in `<data>/optimized/`
 
 Frontend never touches SQLite directly. All data flows through `backendJson()` / `backendFetch()` in `app/lib/backend.ts`, authenticated via `X-Admin-Secret` header (server-to-server only).
 
@@ -41,6 +42,8 @@ SQLite on Railway volume. Migrations are auto-applied on startup in `backend/db.
 | v9 | Folder privacy: password_hash, access_mode, folder_access table, feature gating |
 | v10 | Stripe price IDs on plans (live-mode IDs — fresh dev DBs need test-mode ones via admin panel) |
 | v11 | Payment idempotency: unique index on (payment_provider, payment_reference); users.email index |
+| v12 | backfill_skipped flag for unrecoverable uploads |
+| v13 | stream_url column for web-optimized video |
 
 ### Key tables
 
@@ -88,6 +91,10 @@ All Express routes are in `backend/routes/`:
 
 | Component | Purpose |
 |---|---|
+| `error.tsx` | Route-level error boundary with retry button |
+| `global-error.tsx` | Root error boundary (inline styles, no Tailwind) |
+| `not-found.tsx` | Custom 404 page |
+| `loading.tsx` | Loading spinner skeleton |
 | `HomeUploadHero` | Drag-drop upload with TUS, anon/logged-in limits, folder picker |
 | `FolderEditor` | Full folder management — files, settings, privacy (password/email) |
 | `FolderAccessGate` | Password form + sign-in prompt for protected folders |
@@ -164,6 +171,16 @@ Own magic-link system (not Supabase):
 3. Paid tiers: higher limits + premium features (password lock, email sharing, etc.)
 
 Quotas are enforced **in the backend** at `/tus-upload/complete` via `utils/quota.js` (plan daily/monthly/total limits for users, IP/day for anonymous). The Next.js cookie checks are advisory UX only.
+
+## File serving
+
+Three backend endpoints serve files with Range request support (required by Safari for `<video>`/`<audio>`):
+
+- **`/f/:uuid`** — preferred: serves optimized copy if available, falls back to original
+- **`/f/:uuid/raw`** — same logic, explicit raw file endpoint
+- **`/f/:uuid/meta`** — JSON metadata; for videos with local copies, returns backend URL (avoids Irys 307 redirect breaking Safari cross-origin)
+
+All use `serveFileWithRange()` helper for HTTP 206 Partial Content support.
 
 ## Stable links & durable originals
 

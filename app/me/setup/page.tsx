@@ -22,7 +22,7 @@ export default async function SetupPage() {
       <div className="w-full max-w-md">
         <div className="mb-8 text-center">
           <h1 className="text-2xl font-medium text-white">{t('setup.title')}</h1>
-          <p className="text-gray-500 text-sm mt-2">{t('setup.subtitle', { prefix: 'stash.app' })}</p>
+          <p className="text-gray-500 text-sm mt-2">{t('setup.subtitle', { prefix: 'stash.offsetworks.xyz' })}</p>
         </div>
         <HandlePicker />
         <div className="text-center mt-6">
