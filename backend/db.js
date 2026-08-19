@@ -29,7 +29,7 @@ db.pragma('foreign_keys = ON');
 // MIGRATIONS
 // =====================================================
 const currentVersion = db.pragma('user_version', { simple: true });
-const LATEST_VERSION = 11;
+const LATEST_VERSION = 13;
 
 // File-copy backup before any pending migration touches an existing DB.
 // Kept under <data>/backups, last 5 retained.
