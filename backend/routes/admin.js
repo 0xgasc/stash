@@ -203,4 +203,24 @@ router.post('/optimize/:uuid', async (req, res) => {
   res.json({ message: 'Optimization triggered in background' });
 });
 
+// PATCH /uploads/:uuid — Update upload metadata (content_type, title, caption, visibility)
+router.patch('/uploads/:uuid', (req, res) => {
+  const { getUploadById, db } = require('../db');
+  const upload = getUploadById(req.params.uuid);
+  if (!upload) return res.status(404).json({ error: 'not_found' });
+  const allowed = ['content_type', 'title', 'caption', 'visibility'];
+  const updates = [];
+  const values = [];
+  for (const key of allowed) {
+    if (req.body[key] !== undefined) {
+      updates.push(`${key} = ?`);
+      values.push(req.body[key]);
+    }
+  }
+  if (!updates.length) return res.status(400).json({ error: 'nothing to update' });
+  values.push(req.params.uuid);
+  db.prepare(`UPDATE uploads SET ${updates.join(', ')} WHERE uuid = ?`).run(...values);
+  res.json({ upload: getUploadById(req.params.uuid) });
+});
+
 module.exports = router;
