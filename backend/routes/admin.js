@@ -203,12 +203,12 @@ router.post('/optimize/:uuid', async (req, res) => {
   res.json({ message: 'Optimization triggered in background' });
 });
 
-// PATCH /uploads/:uuid — Update upload metadata (content_type, title, caption, visibility)
+// PATCH /uploads/:uuid — Update upload metadata (content_type, title, caption, visibility, refresh_skipped)
 router.patch('/uploads/:uuid', (req, res) => {
   const { getUploadById, db } = require('../db');
   const upload = getUploadById(req.params.uuid);
   if (!upload) return res.status(404).json({ error: 'not_found' });
-  const allowed = ['content_type', 'title', 'caption', 'visibility'];
+  const allowed = ['content_type', 'title', 'caption', 'visibility', 'refresh_skipped'];
   const updates = [];
   const values = [];
   for (const key of allowed) {
@@ -221,6 +221,21 @@ router.patch('/uploads/:uuid', (req, res) => {
   values.push(req.params.uuid);
   db.prepare(`UPDATE uploads SET ${updates.join(', ')} WHERE uuid = ?`).run(...values);
   res.json({ upload: getUploadById(req.params.uuid) });
+});
+
+// POST /uploads/bulk-skip-refresh — Mark multiple uploads to skip devnet refresh
+router.post('/uploads/bulk-skip-refresh', (req, res) => {
+  const { setRefreshSkipped } = require('../db');
+  const { uuids, skip = true } = req.body;
+  if (!Array.isArray(uuids) || uuids.length === 0) {
+    return res.status(400).json({ error: 'uuids must be a non-empty array' });
+  }
+  let updated = 0;
+  for (const uuid of uuids) {
+    const result = setRefreshSkipped(uuid, skip);
+    if (result.changes > 0) updated++;
+  }
+  res.json({ updated, total: uuids.length, refresh_skipped: !!skip });
 });
 
 module.exports = router;

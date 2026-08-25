@@ -44,6 +44,7 @@ SQLite on Railway volume. Migrations are auto-applied on startup in `backend/db.
 | v11 | Payment idempotency: unique index on (payment_provider, payment_reference); users.email index |
 | v12 | backfill_skipped flag for unrecoverable uploads |
 | v13 | stream_url column for web-optimized video |
+| v14 | refresh_skipped flag to opt files out of devnet refresh |
 
 ### Key tables
 

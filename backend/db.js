@@ -29,7 +29,7 @@ db.pragma('foreign_keys = ON');
 // MIGRATIONS
 // =====================================================
 const currentVersion = db.pragma('user_version', { simple: true });
-const LATEST_VERSION = 13;
+const LATEST_VERSION = 14;
 
 // File-copy backup before any pending migration touches an existing DB.
 // Kept under <data>/backups, last 5 retained.
@@ -403,6 +403,12 @@ migrate(13, 'stream_url for web-optimized video', () => {
   `);
 });
 
+migrate(14, 'refresh_skipped flag to opt files out of devnet refresh', () => {
+  db.exec(`
+    ALTER TABLE uploads ADD COLUMN refresh_skipped INTEGER DEFAULT 0;
+  `);
+});
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -595,10 +601,11 @@ function getCronRuns({ limit = 20 } = {}) {
 const _findStaleUploads = db.prepare(`
   SELECT u.uuid, u.filename
   FROM uploads u
-  WHERE COALESCE(
-    (SELECT MAX(created_at) FROM upload_links WHERE upload_uuid = u.uuid),
-    u.created_at
-  ) < datetime('now', @cutoff)
+  WHERE u.refresh_skipped = 0
+    AND COALESCE(
+      (SELECT MAX(created_at) FROM upload_links WHERE upload_uuid = u.uuid),
+      u.created_at
+    ) < datetime('now', @cutoff)
   ORDER BY u.created_at ASC
   LIMIT @limit
 `);
@@ -644,6 +651,13 @@ function getBackfillStats() {
     else missing++;
   }
   return { total: all.length, withOriginal, missing, skipped };
+}
+
+const _setRefreshSkipped = db.prepare(`
+  UPDATE uploads SET refresh_skipped = @val WHERE uuid = @uuid
+`);
+function setRefreshSkipped(uuid, skipped) {
+  return _setRefreshSkipped.run({ uuid, val: skipped ? 1 : 0 });
 }
 
 // =====================================================
@@ -1607,6 +1621,7 @@ module.exports = {
   markBackfillSkipped,
   resetAllBackfillSkipped,
   getBackfillStats,
+  setRefreshSkipped,
   getExpiringUploads,
   updateGeo,
   findUuidsNeedingGeo,
