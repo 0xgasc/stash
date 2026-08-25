@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import Link from 'next/link'
-import { Loader2, RefreshCw, Copy, ExternalLink, RotateCcw, Search, ChevronLeft, ChevronRight, FileText, ChevronDown, ChevronUp } from 'lucide-react'
+import { Loader2, RefreshCw, Copy, ExternalLink, RotateCcw, Search, ChevronLeft, ChevronRight, FileText, ChevronDown, ChevronUp, ShieldOff, Shield, ArrowUpDown } from 'lucide-react'
 
 interface Upload {
   id: number
@@ -27,6 +27,7 @@ interface Upload {
   country: string | null
   region: string | null
   city: string | null
+  refresh_skipped: number
 }
 
 interface UploadsResponse {
@@ -46,6 +47,8 @@ interface LinkRevision {
   created_at: string
 }
 
+type SortMode = 'recent' | 'largest'
+
 export default function UploadHistory({ authenticated }: { authenticated: boolean }) {
   const [data, setData] = useState<UploadsResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -53,8 +56,10 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
   const [page, setPage] = useState(1)
   const [search, setSearch] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
+  const [sortMode, setSortMode] = useState<SortMode>('recent')
   const [copiedId, setCopiedId] = useState<string | null>(null)
   const [reuploadingId, setReuploadingId] = useState<string | null>(null)
+  const [togglingSkipId, setTogglingSkipId] = useState<string | null>(null)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [linkHistory, setLinkHistory] = useState<Record<string, LinkRevision[]>>({})
   const [linkHistoryLoading, setLinkHistoryLoading] = useState<string | null>(null)
@@ -66,6 +71,7 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
       const params = new URLSearchParams({ page: page.toString(), limit: '20' })
       if (search) params.set('search', search)
       if (sourceFilter) params.set('source', sourceFilter)
+      if (sortMode === 'largest') params.set('sort', 'size')
 
       const res = await fetch(`/api/admin/uploads?${params}`)
       if (res.status === 401) return
@@ -80,7 +86,7 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
     } finally {
       setLoading(false)
     }
-  }, [page, search, sourceFilter])
+  }, [page, search, sourceFilter, sortMode])
 
   useEffect(() => {
     if (authenticated) fetchUploads()
@@ -96,6 +102,11 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
     setPage(1)
   }
 
+  const toggleSort = () => {
+    setSortMode(s => s === 'recent' ? 'largest' : 'recent')
+    setPage(1)
+  }
+
   const copyUrl = async (url: string, uuid: string) => {
     await navigator.clipboard.writeText(url)
     setCopiedId(uuid)
@@ -108,7 +119,6 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
       const res = await fetch(`/api/admin/uploads/${uuid}`, { method: 'POST' })
       if (res.ok) {
         fetchUploads()
-        // refresh history if it was loaded
         if (linkHistory[uuid]) fetchLinkHistory(uuid)
       } else {
         const d = await res.json()
@@ -121,6 +131,35 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
     }
   }
 
+  const toggleRefreshSkipped = async (uuid: string, currentlySkipped: boolean) => {
+    setTogglingSkipId(uuid)
+    try {
+      const res = await fetch(`/api/admin/uploads/${uuid}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_skipped: currentlySkipped ? 0 : 1 }),
+      })
+      if (res.ok) {
+        setData(prev => {
+          if (!prev) return prev
+          return {
+            ...prev,
+            uploads: prev.uploads.map(u =>
+              u.uuid === uuid ? { ...u, refresh_skipped: currentlySkipped ? 0 : 1 } : u
+            ),
+          }
+        })
+      } else {
+        const d = await res.json()
+        setError(d.error || 'Failed to update')
+      }
+    } catch {
+      setError('Failed to update refresh skip')
+    } finally {
+      setTogglingSkipId(null)
+    }
+  }
+
   const fetchLinkHistory = async (uuid: string) => {
     setLinkHistoryLoading(uuid)
     try {
@@ -130,7 +169,7 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
         setLinkHistory(prev => ({ ...prev, [uuid]: d.links || [] }))
       }
     } catch {
-      // ignore — error inline if user retries
+      // ignore
     } finally {
       setLinkHistoryLoading(null)
     }
@@ -167,8 +206,8 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
   }
 
-  // Collect unique sources for filter
   const sources = data ? [...new Set(data.uploads.map(u => u.source))] : []
+  const skippedCount = data ? data.uploads.filter(u => u.refresh_skipped).length : 0
 
   return (
     <div className="mt-16">
@@ -177,6 +216,9 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
           <h2 className="text-2xl font-medium text-white mb-1">Upload History</h2>
           <p className="text-gray-500 text-sm">
             {data ? `${data.total} uploads` : 'All uploads tracked'}
+            {skippedCount > 0 && (
+              <span className="text-yellow-600 ml-2">({skippedCount} refresh-skipped on this page)</span>
+            )}
           </p>
         </div>
         <button
@@ -215,6 +257,16 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
           <option value="">All sources</option>
           {sources.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
+        <button
+          onClick={toggleSort}
+          className={`flex items-center gap-1.5 bg-gray-950 border border-gray-800 px-3 py-2 text-sm transition-colors ${
+            sortMode === 'largest' ? 'text-accent-cyan border-accent-cyan/30' : 'text-gray-400 hover:text-white'
+          }`}
+          title={sortMode === 'recent' ? 'Sort by largest' : 'Sort by recent'}
+        >
+          <ArrowUpDown className="w-3.5 h-3.5" />
+          {sortMode === 'largest' ? 'Largest' : 'Recent'}
+        </button>
       </div>
 
       {/* Table */}
@@ -228,8 +280,9 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
             {data.uploads.map((u) => {
               const isExpanded = expandedId === u.uuid
               const hasClientInfo = u.ip_address || u.user_agent || u.referer || u.api_key_name
+              const isSkipped = !!u.refresh_skipped
               return (
-                <div key={u.uuid} className="p-4 hover:bg-gray-900/30 transition-colors">
+                <div key={u.uuid} className={`p-4 hover:bg-gray-900/30 transition-colors ${isSkipped ? 'border-l-2 border-l-yellow-600/50' : ''}`}>
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 mb-1">
@@ -238,6 +291,11 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
                         </span>
                         <Link href={`/admin/uploads/${u.uuid}`} className="text-white text-sm truncate hover:underline">{u.filename}</Link>
                         <span className="text-gray-600 text-xs flex-shrink-0">{formatBytes(u.size)}</span>
+                        {isSkipped && (
+                          <span className="text-[10px] bg-yellow-900/30 text-yellow-500 px-1.5 py-0.5 rounded uppercase tracking-wider font-medium">
+                            skip refresh
+                          </span>
+                        )}
                       </div>
                       {u.description && (
                         <p className="text-gray-500 text-xs mt-1 truncate">{u.description}</p>
@@ -254,6 +312,20 @@ export default function UploadHistory({ authenticated }: { authenticated: boolea
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={() => toggleRefreshSkipped(u.uuid, isSkipped)}
+                        disabled={togglingSkipId === u.uuid}
+                        className={`p-2 transition-colors ${isSkipped ? 'text-yellow-500 hover:text-yellow-300' : 'text-gray-600 hover:text-yellow-500'} disabled:opacity-50`}
+                        title={isSkipped ? 'Resume refresh (re-enable devnet re-uploads)' : 'Skip refresh (stop devnet re-uploads)'}
+                      >
+                        {togglingSkipId === u.uuid ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : isSkipped ? (
+                          <ShieldOff className="w-3.5 h-3.5" />
+                        ) : (
+                          <Shield className="w-3.5 h-3.5" />
+                        )}
+                      </button>
                       <button
                         onClick={() => toggleExpand(u.uuid)}
                         className="p-2 text-gray-600 hover:text-white"

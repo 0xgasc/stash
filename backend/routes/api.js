@@ -132,8 +132,9 @@ router.get('/uploads', requireAuth, (req, res) => {
   const limit = parseInt(req.query.limit) || 50;
   const source = req.query.source || undefined;
   const search = req.query.search || undefined;
+  const sort = req.query.sort || undefined;
 
-  const result = getUploads({ page, limit, source, search });
+  const result = getUploads({ page, limit, source, search, sort });
   res.json(result);
 });
 

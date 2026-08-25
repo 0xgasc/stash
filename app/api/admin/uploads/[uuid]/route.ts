@@ -17,6 +17,25 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ uui
   return NextResponse.json(data, { status: res.status })
 }
 
+export async function PATCH(req: NextRequest, { params }: { params: Promise<{ uuid: string }> }) {
+  if (!(await isAdminAuthenticated())) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+
+  const { uuid } = await params
+  const body = await req.json()
+  const res = await fetch(`${UPLOAD_SERVER}/api/v1/admin/uploads/${uuid}`, {
+    method: 'PATCH',
+    headers: {
+      'X-Admin-Secret': ADMIN_SECRET,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
+  })
+  const data = await res.json()
+  return NextResponse.json(data, { status: res.status })
+}
+
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ uuid: string }> }) {
   if (!(await isAdminAuthenticated())) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })

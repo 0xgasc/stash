@@ -470,7 +470,7 @@ function getUploadByReuploadToken(token) {
   return _getUploadByReuploadToken.get(token) || null;
 }
 
-function getUploads({ page = 1, limit = 50, source, search } = {}) {
+function getUploads({ page = 1, limit = 50, source, search, sort } = {}) {
   limit = Math.min(Math.max(limit, 1), 200);
   const offset = (Math.max(page, 1) - 1) * limit;
 
@@ -486,12 +486,13 @@ function getUploads({ page = 1, limit = 50, source, search } = {}) {
     params.search = `%${search}%`;
   }
 
+  const orderBy = sort === 'size' ? 'uploads.size DESC' : 'uploads.created_at DESC';
   const total = db.prepare(`SELECT COUNT(*) as count FROM uploads WHERE ${where}`).get(params).count;
   const uploads = db.prepare(
     `SELECT uploads.*, api_keys.name AS api_key_name
      FROM uploads
      LEFT JOIN api_keys ON api_keys.id = uploads.api_key_id
-     WHERE ${where} ORDER BY created_at DESC LIMIT @limit OFFSET @offset`
+     WHERE ${where} ORDER BY ${orderBy} LIMIT @limit OFFSET @offset`
   ).all({ ...params, limit, offset });
 
   return { uploads, total, page, limit, pages: Math.ceil(total / limit) };
