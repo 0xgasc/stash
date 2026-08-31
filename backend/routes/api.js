@@ -230,13 +230,63 @@ router.get('/stats', requireAuth, (req, res) => {
 });
 
 // =====================================================
-// POST /fund-irys — Transfer ETH to Irys devnet balance from any chain (admin)
+// GET /balances — Irys devnet + on-chain wallet balances (admin)
 // =====================================================
 const CHAIN_RPCS = {
   sepolia: process.env.SEPOLIA_RPC || 'https://ethereum-sepolia-rpc.publicnode.com',
   'base-sepolia': 'https://sepolia.base.org',
   'arbitrum-sepolia': 'https://sepolia-rollup.arbitrum.io/rpc',
 };
+
+router.get('/balances', requireAuth, async (req, res) => {
+  try {
+    const { Uploader } = await import('@irys/upload');
+    const { Ethereum } = await import('@irys/upload-ethereum');
+
+    const privateKey = process.env.PRIVATE_KEY;
+    if (!privateKey) return res.status(500).json({ error: 'PRIVATE_KEY not configured' });
+
+    const key = privateKey.trim().replace(/^0x/i, '');
+    const uploader = await Uploader(Ethereum).withWallet(key).withRpc(CHAIN_RPCS.sepolia).devnet();
+    const address = uploader.address;
+    const irysBalanceWei = (await uploader.getBalance()).toString();
+
+    const chainBalances = {};
+    await Promise.all(Object.entries(CHAIN_RPCS).map(async ([name, rpc]) => {
+      try {
+        const r = await fetch(rpc, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [address, 'latest'], id: 1 }),
+        });
+        const data = await r.json();
+        const wei = BigInt(data.result || '0');
+        chainBalances[name] = { wei: wei.toString(), eth: formatWei(wei) };
+      } catch {
+        chainBalances[name] = { wei: '0', eth: '0.000000', error: 'rpc_failed' };
+      }
+    }));
+
+    res.json({
+      address,
+      irys: { wei: irysBalanceWei, eth: formatWei(BigInt(irysBalanceWei)) },
+      chains: chainBalances,
+    });
+  } catch (err) {
+    console.error('balances error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+function formatWei(wei) {
+  const whole = wei / BigInt(1e18);
+  const frac = (wei % BigInt(1e18)).toString().padStart(18, '0').slice(0, 6);
+  return `${whole}.${frac}`;
+}
+
+// =====================================================
+// POST /fund-irys — Transfer ETH to Irys devnet balance from any chain (admin)
+// =====================================================
 
 router.post('/fund-irys', requireAuth, async (req, res) => {
   const amountEth = Number(req.body?.amountEth);
