@@ -258,11 +258,27 @@ app.post('/tus-upload/complete', async (req, res) => {
     const originalFilename = sanitizeFilename(req.body.originalFilename);
 
     // Authoritative quota check: plan limits for users, IP/day cap for anon.
+    // API key holders (external integrations) bypass the anonymous IP quota.
     const ctxEarly = trustedUserContext(req);
-    const clientIp = getClientInfo(req).ip_address;
-    const quota = checkUploadQuota(ctxEarly.user_id, clientIp);
-    if (!quota.ok) {
-      return res.status(429).json({ error: quota.error });
+    let resolvedApiKey = null;
+    if (!ctxEarly.user_id) {
+      const apiKeyHeader = req.headers['x-api-key'];
+      if (apiKeyHeader) {
+        const hash = require('crypto').createHash('sha256').update(apiKeyHeader).digest('hex');
+        const { findApiKeyByHash, updateApiKeyLastUsed } = require('./db');
+        const found = findApiKeyByHash(hash);
+        if (found) {
+          updateApiKeyLastUsed(found.id);
+          resolvedApiKey = found;
+        }
+      }
+    }
+    if (!resolvedApiKey) {
+      const clientIp = getClientInfo(req).ip_address;
+      const quota = checkUploadQuota(ctxEarly.user_id, clientIp);
+      if (!quota.ok) {
+        return res.status(429).json({ error: quota.error });
+      }
     }
 
     console.log(`📤 Processing completed tus upload: ${uploadId}`);
@@ -280,7 +296,6 @@ app.post('/tus-upload/complete', async (req, res) => {
         const result = await uploadFileToIrysFromPath(possiblePath, originalFilename);
         console.log(`✅ Irys upload complete: ${result.url}`);
 
-        // Record in database (with optional user_id from trusted Next.js proxy)
         const ctx = trustedUserContext(req);
         const dbRecord = insertUpload({
           source: req.body.source || 'web',
@@ -292,6 +307,7 @@ app.post('/tus-upload/complete', async (req, res) => {
           ar_url: result.arUrl,
           price_wei: result.priceWei,
           user_id: ctx.user_id,
+          api_key_id: resolvedApiKey ? resolvedApiKey.id : null,
           ...getClientInfo(req),
         });
         scheduleGeoLookup(dbRecord.uuid, dbRecord.ip_address);
@@ -357,7 +373,6 @@ app.post('/tus-upload/complete', async (req, res) => {
 
     completedTusUploads.delete(uploadId);
 
-    // Record in database (with optional user_id from trusted Next.js proxy)
     const ctx = trustedUserContext(req);
     const dbRecord = insertUpload({
       source: req.body.source || 'web',
@@ -369,6 +384,7 @@ app.post('/tus-upload/complete', async (req, res) => {
       ar_url: result.arUrl,
       price_wei: result.priceWei,
       user_id: ctx.user_id,
+      api_key_id: resolvedApiKey ? resolvedApiKey.id : null,
       ...getClientInfo(req),
     });
     scheduleGeoLookup(dbRecord.uuid, dbRecord.ip_address);
