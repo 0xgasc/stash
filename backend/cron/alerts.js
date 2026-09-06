@@ -13,6 +13,9 @@ const FIRST_RUN_DELAY_MS = 90 * 1000;   // 90s after boot
 
 const SEPOLIA_LOW_THRESHOLD_ETH = parseFloat(process.env.SEPOLIA_LOW_THRESHOLD || '0.1');
 const IRYS_LOW_THRESHOLD_ETH = parseFloat(process.env.IRYS_LOW_THRESHOLD || '0.005');
+const AUTO_FUND_COOLDOWN_MS = 6 * 60 * 60 * 1000;
+
+let lastAutoFundAt = 0;
 
 const SEPOLIA_RPC_FALLBACKS = [
   'https://ethereum-sepolia-rpc.publicnode.com',
@@ -86,8 +89,16 @@ async function runOnce() {
     const irysWei = await fetchIrysBalance();
     if (irysWei !== null) {
       const eth = parseFloat(weiToEth(irysWei));
-      if (eth < IRYS_LOW_THRESHOLD_ETH) {
+      // uploader.fund() gives up after ~30s, but the tx is already broadcast
+      // and credits minutes later. Without this cooldown the next hourly run
+      // still sees a low balance and funds again, sending real ETH once per
+      // hour until the credit finally lands.
+      const inCooldown = Date.now() - lastAutoFundAt < AUTO_FUND_COOLDOWN_MS;
+      if (eth < IRYS_LOW_THRESHOLD_ETH && inCooldown) {
+        console.log('⏭️  Irys low but auto-fund is in cooldown — a recent fund tx may still be settling');
+      } else if (eth < IRYS_LOW_THRESHOLD_ETH) {
         const FUND_AMOUNT_ETH = parseFloat(process.env.IRYS_AUTO_FUND_AMOUNT || '0.1');
+        lastAutoFundAt = Date.now();
         console.log(`⚠️  Irys low: ${weiToEth(irysWei)} ETH < ${IRYS_LOW_THRESHOLD_ETH} — auto-funding ${FUND_AMOUNT_ETH} ETH...`);
         try {
           const { Uploader } = await import('@irys/upload');

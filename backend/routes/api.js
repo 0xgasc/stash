@@ -18,7 +18,7 @@ const {
 } = require('../db');
 const { uploadFileToIrysFromPath } = require('../utils/irysUploader');
 const { reuploadFromExisting } = require('../utils/reupload');
-const { requireApiKey, requireAdminSecret, requireAuth } = require('../middleware/apiAuth');
+const { requireApiKey, requireAdminSecret } = require('../middleware/apiAuth');
 const { getClientInfo } = require('../utils/clientInfo');
 const { scheduleGeoLookup } = require('../utils/geo');
 const { sendAlert } = require('../utils/alerts');
@@ -127,7 +127,7 @@ router.post('/upload', requireApiKey, apiUploadLimiter, upload.single('file'), a
 // =====================================================
 // GET /uploads — List uploads (paginated)
 // =====================================================
-router.get('/uploads', requireAuth, (req, res) => {
+router.get('/uploads', requireAdminSecret, (req, res) => {
   const page = parseInt(req.query.page) || 1;
   const limit = parseInt(req.query.limit) || 50;
   const source = req.query.source || undefined;
@@ -143,7 +143,7 @@ router.get('/uploads', requireAuth, (req, res) => {
 // MUST be defined before /uploads/:uuid or Express matches
 // "expiring" as a uuid and this route is unreachable.
 // =====================================================
-router.get('/uploads/expiring', requireAuth, (req, res) => {
+router.get('/uploads/expiring', requireAdminSecret, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
   res.json({ uploads: getExpiringUploads({ limit }) });
 });
@@ -151,7 +151,7 @@ router.get('/uploads/expiring', requireAuth, (req, res) => {
 // =====================================================
 // GET /uploads/:uuid — Single upload detail
 // =====================================================
-router.get('/uploads/:uuid', requireAuth, (req, res) => {
+router.get('/uploads/:uuid', requireAdminSecret, (req, res) => {
   const upload = getUploadById(req.params.uuid);
   if (!upload) {
     return res.status(404).json({ error: 'Upload not found' });
@@ -162,7 +162,7 @@ router.get('/uploads/:uuid', requireAuth, (req, res) => {
 // =====================================================
 // GET /uploads/:uuid/links — Full link history (admin)
 // =====================================================
-router.get('/uploads/:uuid/links', requireAuth, (req, res) => {
+router.get('/uploads/:uuid/links', requireAdminSecret, (req, res) => {
   const upload = getUploadById(req.params.uuid);
   if (!upload) {
     return res.status(404).json({ error: 'Upload not found' });
@@ -173,7 +173,7 @@ router.get('/uploads/:uuid/links', requireAuth, (req, res) => {
 // =====================================================
 // POST /uploads/:uuid/reupload — Re-upload (authenticated)
 // =====================================================
-router.post('/uploads/:uuid/reupload', requireAuth, async (req, res) => {
+router.post('/uploads/:uuid/reupload', requireAdminSecret, async (req, res) => {
   const record = getUploadById(req.params.uuid);
   if (!record) {
     return res.status(404).json({ error: 'Upload not found' });
@@ -224,7 +224,7 @@ router.post('/reupload/:token', reuploadLimiter, upload.single('file'), async (r
 // =====================================================
 // GET /stats — Upload statistics
 // =====================================================
-router.get('/stats', requireAuth, (req, res) => {
+router.get('/stats', requireAdminSecret, (req, res) => {
   const stats = getStats();
   res.json(stats);
 });
@@ -238,7 +238,7 @@ const CHAIN_RPCS = {
   'arbitrum-sepolia': 'https://sepolia-rollup.arbitrum.io/rpc',
 };
 
-router.get('/balances', requireAuth, async (req, res) => {
+router.get('/balances', requireAdminSecret, async (req, res) => {
   try {
     const { Uploader } = await import('@irys/upload');
     const { Ethereum } = await import('@irys/upload-ethereum');
@@ -288,14 +288,20 @@ function formatWei(wei) {
 // POST /fund-irys — Transfer ETH to Irys devnet balance from any chain (admin)
 // =====================================================
 
-router.post('/fund-irys', requireAuth, async (req, res) => {
+router.post('/fund-irys', requireAdminSecret, async (req, res) => {
   const amountEth = Number(req.body?.amountEth);
+  // Irys tracks a separate balance ledger per token, and uploads spend the
+  // `ethereum` one, which it credits by watching Sepolia. Funding through a
+  // base-sepolia / arbitrum-sepolia RPC under the same Ethereum token sends
+  // real ETH to the bundler on a chain Irys never scans for that ledger — the
+  // tx confirms on-chain, the credit never arrives, and the funds are stranded.
   const chain = req.body?.chain || 'sepolia';
-  const rpc = CHAIN_RPCS[chain];
-
-  if (!rpc) {
-    return res.status(400).json({ error: `Unsupported chain: ${chain}. Use: ${Object.keys(CHAIN_RPCS).join(', ')}` });
+  if (chain !== 'sepolia') {
+    return res.status(400).json({
+      error: `Funding is only supported on sepolia — Irys credits the ethereum balance from that chain only. Sending on ${chain} strands the funds at the bundler.`,
+    });
   }
+  const rpc = CHAIN_RPCS.sepolia;
   if (!Number.isFinite(amountEth) || amountEth <= 0 || amountEth > 1) {
     return res.status(400).json({ error: 'amountEth must be a positive number, max 1 ETH per request' });
   }
@@ -349,7 +355,7 @@ router.post('/fund-irys', requireAuth, async (req, res) => {
 // =====================================================
 // POST /alerts/test — Send a test alert (admin)
 // =====================================================
-router.post('/alerts/test', requireAuth, async (req, res) => {
+router.post('/alerts/test', requireAdminSecret, async (req, res) => {
   // Bypass cooldown by including a timestamp in the key
   const result = await sendAlert({
     key: `test-${Date.now()}`,
@@ -364,7 +370,7 @@ router.post('/alerts/test', requireAuth, async (req, res) => {
 // =====================================================
 // GET /cron/runs — Cron run history (admin)
 // =====================================================
-router.get('/cron/runs', requireAuth, (req, res) => {
+router.get('/cron/runs', requireAdminSecret, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit) || 20, 100);
   res.json({ runs: getCronRuns({ limit }) });
 });
@@ -372,7 +378,7 @@ router.get('/cron/runs', requireAuth, (req, res) => {
 // =====================================================
 // POST /uploads/bulk-reupload — Re-upload multiple uploads (admin)
 // =====================================================
-router.post('/uploads/bulk-reupload', requireAuth, async (req, res) => {
+router.post('/uploads/bulk-reupload', requireAdminSecret, async (req, res) => {
   const uuids = Array.isArray(req.body?.uuids) ? req.body.uuids : [];
   if (uuids.length === 0) return res.status(400).json({ error: 'uuids array required' });
   if (uuids.length > 50) return res.status(400).json({ error: 'max 50 uuids per request' });

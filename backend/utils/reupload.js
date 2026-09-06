@@ -26,10 +26,19 @@ async function reuploadFromExisting(record) {
   for (const url of urls) {
     try {
       const response = await fetch(url);
-      if (response.ok) {
-        buffer = Buffer.from(await response.arrayBuffer());
-        break;
+      if (!response.ok) continue;
+      const candidate = Buffer.from(await response.arrayBuffer());
+      // An evicted devnet tx still answers 200 — with the gateway's HTML
+      // app shell. Re-uploading that silently replaces the file with a
+      // ~5KB error page and reports success, which is how the last
+      // pointer to an already-evicted file gets destroyed. The stored
+      // byte count is the only trustworthy check we have.
+      if (record.size && candidate.length !== record.size) {
+        console.log(`⚠️ Reupload rejected ${url}: got ${candidate.length}B, expected ${record.size}B`);
+        continue;
       }
+      buffer = candidate;
+      break;
     } catch (err) {
       console.log(`⚠️ Reupload fetch failed for ${url}: ${err.message}`);
     }

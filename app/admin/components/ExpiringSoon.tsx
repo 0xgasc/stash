@@ -18,7 +18,9 @@ interface ExpiringRow {
   created_at: string
 }
 
-const REFRESH_THRESHOLD_DAYS = 15
+// Must match REFRESH_AFTER_DAYS in backend/cron/refreshDevnet.js — a lower
+// value here marks files "overdue" that the cron has not yet been asked to touch.
+const REFRESH_THRESHOLD_DAYS = 20
 
 function daysSince(iso: string | null): number {
   if (!iso) return 999
