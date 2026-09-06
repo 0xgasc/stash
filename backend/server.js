@@ -535,6 +535,27 @@ app.get('/f/:uuid/raw', (req, res) => {
   serveFileWithRange(req, res, filePath, ct, 'public, max-age=31536000, immutable');
 });
 
+// GET /f/:uuid/original — the exact bytes that were uploaded, always.
+// /f/:uuid and /f/:uuid/raw prefer the faststart remux for videos, which
+// has a different byte count and content-type than the original, so
+// integrators that verify `size` on read-back (UMO's HD archive) or need
+// the source container must come here. Never falls back to the gateway:
+// a 404 here means the archive copy is missing, which is the signal.
+app.get('/f/:uuid/original', (req, res) => {
+  const { uuid } = req.params;
+  if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).send('Invalid id');
+  const upload = getUploadById(uuid);
+  if (!upload) return res.status(404).send('Not found');
+  const { getOriginalPath } = require('./utils/originals');
+  const filePath = getOriginalPath(uuid);
+  if (!filePath) return res.status(404).send('Original not preserved');
+  res.set('Access-Control-Allow-Origin', '*');
+  const safeName = String(upload.filename || uuid).replace(/["\r\n]/g, '');
+  res.set('Content-Disposition', `inline; filename="${safeName}"`);
+  serveFileWithRange(req, res, filePath, upload.content_type || 'application/octet-stream',
+    'public, max-age=31536000, immutable');
+});
+
 // =====================================================
 // HEALTH CHECK
 // =====================================================
