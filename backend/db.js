@@ -614,6 +614,18 @@ function findStaleUploads({ olderThanDays = 50, limit = 25 } = {}) {
   return _findStaleUploads.all({ cutoff: `-${olderThanDays} days`, limit });
 }
 
+// Everything the verify sweep needs to check a devnet copy and, if it's
+// wrong, hand the row straight to reuploadFromExisting().
+const _getLiveUploadsForVerify = db.prepare(`
+  SELECT uuid, filename, irys_url, arweave_id, size
+  FROM uploads
+  WHERE refresh_skipped = 0 AND irys_url IS NOT NULL AND size > 0
+  ORDER BY created_at ASC
+`);
+function getLiveUploadsForVerify() {
+  return _getLiveUploadsForVerify.all();
+}
+
 const _getAllUploadsForBackfill = db.prepare(`
   SELECT uuid, filename, arweave_id, irys_url, size
   FROM uploads
@@ -1619,6 +1631,7 @@ module.exports = {
   getUploadLinks,
   findStaleUploads,
   getUploadsWithoutOriginals,
+  getLiveUploadsForVerify,
   markBackfillSkipped,
   resetAllBackfillSkipped,
   getBackfillStats,

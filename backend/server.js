@@ -27,6 +27,7 @@ const { scheduleGeoLookup } = require('./utils/geo');
 const { startReuploadCron } = require('./cron/reuploadStale');
 const { startRefreshCron } = require('./cron/refreshDevnet');
 const { startAlertCron } = require('./cron/alerts');
+const { startVerifyCron } = require('./cron/verifyDevnet');
 const { addUploadToFolder, getFolderById, getInboxFolder } = require('./db');
 const { isSafeTusId, sanitizeFilename } = require('./utils/sanitize');
 const { checkUploadQuota } = require('./utils/quota');
@@ -616,4 +617,5 @@ app.listen(PORT, () => {
   startReuploadCron();
   startRefreshCron();
   startAlertCron();
+  startVerifyCron();
 });
