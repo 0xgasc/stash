@@ -22,7 +22,7 @@ const GATEWAYS = [
 
 let running = false;
 
-async function tryDownload(txId, filename) {
+async function tryDownload(txId, filename, expectedSize) {
   for (const gw of GATEWAYS) {
     try {
       const url = `${gw}/${txId}`;
@@ -34,6 +34,12 @@ async function tryDownload(txId, filename) {
 
       const buffer = Buffer.from(await resp.arrayBuffer());
       if (buffer.length < 100) continue;
+      // The content-type check above is not sufficient: a file already
+      // clobbered by the old refresh-cron bug serves the gateway's HTML
+      // shell under the *original* content-type, so it looks like a valid
+      // download. Saving it would cement the corruption as the durable
+      // original. Byte count is the only reliable signal.
+      if (expectedSize && buffer.length !== expectedSize) continue;
 
       return { buffer, gateway: gw };
     } catch {
@@ -62,7 +68,7 @@ async function runOnce() {
       console.log(`🕓 Backfill cron: ${missing.length} upload(s) missing originals`);
     }
 
-    for (const { uuid, filename, arweave_id, irys_url } of missing) {
+    for (const { uuid, filename, arweave_id, irys_url, size } of missing) {
       processed++;
       const txId = arweave_id || (irys_url ? irys_url.split('/').pop() : null);
       if (!txId) {
@@ -72,7 +78,7 @@ async function runOnce() {
         continue;
       }
 
-      const result = await tryDownload(txId, filename);
+      const result = await tryDownload(txId, filename, size);
       if (result) {
         preserveOriginalFromBuffer(result.buffer, uuid);
         success++;

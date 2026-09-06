@@ -17,7 +17,14 @@ async function reuploadFromExisting(record) {
   // uploaded before originals were preserved.
   const localPath = getOriginalPath(record.uuid);
   if (localPath) {
-    return uploadFileToIrysFromPath(localPath, record.filename);
+    // A local original saved by an older backfill run may itself be the
+    // gateway's HTML shell rather than the file, so it gets the same byte
+    // check as a gateway fetch before we trust it.
+    const localSize = fs.statSync(localPath).size;
+    if (!record.size || localSize === record.size) {
+      return uploadFileToIrysFromPath(localPath, record.filename);
+    }
+    console.log(`⚠️ Local original for ${record.uuid} is ${localSize}B, expected ${record.size}B — ignoring`);
   }
 
   const urls = [record.irys_url, `https://arweave.net/${record.arweave_id}`];

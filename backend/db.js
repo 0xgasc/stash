@@ -615,7 +615,7 @@ function findStaleUploads({ olderThanDays = 50, limit = 25 } = {}) {
 }
 
 const _getAllUploadsForBackfill = db.prepare(`
-  SELECT uuid, filename, arweave_id, irys_url
+  SELECT uuid, filename, arweave_id, irys_url, size
   FROM uploads
   WHERE backfill_skipped = 0
   ORDER BY created_at ASC
