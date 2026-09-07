@@ -223,6 +223,64 @@ router.patch('/uploads/:uuid', (req, res) => {
   res.json({ upload: getUploadById(req.params.uuid) });
 });
 
+// POST /import-url — Adopt a file that already lives on a gateway.
+// Downloads the bytes onto the volume, verifies the byte count against
+// the caller-supplied size, and registers the row with the EXISTING
+// gateway URL so nothing is spent now; the refresh/verify crons take it
+// from there. Registering a URL without the bytes is refused by design —
+// that is the no-anchor chain that lost 143 files.
+router.post('/import-url', async (req, res) => {
+  const fs = require('fs'); const os = require('os'); const path = require('path');
+  const { pipeline } = require('stream/promises'); const { Readable } = require('stream');
+  const { insertUpload, db } = require('../db');
+  const { preserveOriginal } = require('../utils/originals');
+
+  const { url, filename, content_type, size, source, title, description } = req.body || {};
+  if (!/^https?:\/\//.test(String(url || ''))) return res.status(400).json({ error: 'url must be http(s)' });
+  if (!filename) return res.status(400).json({ error: 'filename required' });
+  const expected = Number(size);
+  if (!Number.isFinite(expected) || expected <= 0) return res.status(400).json({ error: 'size (bytes) required — it is the integrity check' });
+
+  const existing = db.prepare('SELECT uuid, size FROM uploads WHERE irys_url = ?').get(url);
+  if (existing) {
+    return res.json({ existed: true, uuid: existing.uuid, size: existing.size,
+      stableUrl: `${req.protocol}://${req.get('host')}/f/${existing.uuid}` });
+  }
+
+  req.setTimeout(0);
+  const tmp = path.join(os.tmpdir(), `stash-import-${require('crypto').randomUUID()}`);
+  try {
+    const r = await fetch(url, { redirect: 'follow' });
+    if (!r.ok || !r.body) return res.status(502).json({ error: `gateway responded ${r.status}` });
+    await pipeline(Readable.fromWeb(r.body), fs.createWriteStream(tmp));
+    const got = fs.statSync(tmp).size;
+    if (got !== expected) {
+      fs.unlinkSync(tmp);
+      return res.status(409).json({ error: 'size_mismatch', expected, got,
+        hint: got < 10_000 ? 'gateway returned its HTML shell — file is evicted' : undefined });
+    }
+
+    const arweave_id = new URL(url).pathname.split('/').filter(Boolean).pop();
+    const record = insertUpload({
+      source: source || 'import', filename, content_type: content_type || 'application/octet-stream',
+      size: got, irys_url: url, arweave_id, ar_url: `ar://${arweave_id}`,
+      title: title || null, description: description || null, visibility: 'private',
+    });
+    if (!preserveOriginal(tmp, record.uuid)) {
+      db.prepare('DELETE FROM upload_links WHERE upload_uuid = ?').run(record.uuid);
+      db.prepare('DELETE FROM uploads WHERE uuid = ?').run(record.uuid);
+      return res.status(500).json({ error: 'could not write archive copy — row not created' });
+    }
+    console.log(`📥 Imported ${filename} (${record.uuid}) ${got}B from ${source || 'import'}`);
+    res.json({ existed: false, uuid: record.uuid, size: got,
+      stableUrl: `${req.protocol}://${req.get('host')}/f/${record.uuid}` });
+  } catch (err) {
+    try { fs.unlinkSync(tmp); } catch {}
+    console.error('import-url error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // POST /uploads/bulk-skip-refresh — Mark multiple uploads to skip devnet refresh
 router.post('/uploads/bulk-skip-refresh', (req, res) => {
   const { setRefreshSkipped } = require('../db');
