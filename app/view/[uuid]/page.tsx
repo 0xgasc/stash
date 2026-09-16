@@ -14,7 +14,11 @@ interface FileMeta {
   title: string | null
   caption: string | null
   created_at: string
-  content_url: string
+  // null when the archive copy is provably not this file any more — the
+  // backend refuses to point us at the gateway for those, because the
+  // gateway answers 200 with an HTML error page.
+  content_url: string | null
+  status?: 'ok' | 'gone'
 }
 
 export const revalidate = 60
@@ -31,7 +35,7 @@ export async function generateMetadata({ params }: { params: Promise<{ uuid: str
     openGraph: {
       title: name,
       description: `${formatBytes(f.size)} ${f.content_type}`,
-      ...(f.content_type.startsWith('image/') && {
+      ...(f.content_type.startsWith('image/') && f.content_url && {
         images: [{ url: `/f/${f.uuid}` }],
       }),
     },
@@ -75,7 +79,11 @@ export default async function ViewPage({
   if (!res.ok || !res.data) notFound()
   const f = res.data
   const name = f.title || f.filename
-  const srcUrl = f.content_url
+  // A lost file has no content_url at all. Rendering the media element
+  // anyway would point it at nothing (or worse, at the gateway's error
+  // page), so the page states plainly that the file is gone.
+  const gone = f.status === 'gone' || !f.content_url
+  const srcUrl = f.content_url ?? ''
 
   return (
     <div className="min-h-screen bg-black">
@@ -84,7 +92,17 @@ export default async function ViewPage({
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         {/* Player area */}
         <div className="border border-gray-800 bg-gray-950 mb-6 overflow-hidden">
-          {isImage(f.content_type) ? (
+          {gone ? (
+            <div className="flex flex-col items-center justify-center p-16 gap-3">
+              <p className="text-white text-sm font-bold uppercase tracking-widest">
+                File no longer available
+              </p>
+              <p className="text-gray-500 text-sm text-center max-w-md">
+                The archived copy of this file was lost and could not be restored.
+                The metadata below is what Stash recorded when it was uploaded.
+              </p>
+            </div>
+          ) : isImage(f.content_type) ? (
             <div className="flex items-center justify-center p-4 min-h-[200px]">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -144,13 +162,15 @@ export default async function ViewPage({
 
             <div className="flex gap-2 shrink-0">
               <CopyLinkButton uuid={f.uuid} />
-              <a
-                href={`/f/${f.uuid}/download`}
-                className="inline-flex items-center gap-2 px-4 py-2 bg-accent-cyan text-black text-sm font-bold hover:brightness-110 transition-all"
-              >
-                <Download className="w-4 h-4" />
-                Download
-              </a>
+              {!gone && (
+                <a
+                  href={`/f/${f.uuid}/download`}
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-accent-cyan text-black text-sm font-bold hover:brightness-110 transition-all"
+                >
+                  <Download className="w-4 h-4" />
+                  Download
+                </a>
+              )}
             </div>
           </div>
         </div>

@@ -42,6 +42,31 @@ function getOriginalPath(uuid) {
   return fs.existsSync(p) ? p : null;
 }
 
+/**
+ * Absolute path of a stored original that is *the right file*, or null.
+ *
+ * Existence is not proof. The 2026-09 corruption wave left ~143 uuids whose
+ * volume "original" is the gateway's 4904-byte HTML app shell, and every
+ * caller that only asked "is there a file?" treated them as healthy — the
+ * archive reported 920/921 intact while 143 files were gone. Byte count is
+ * the only signal that distinguishes a real file from a gateway error page,
+ * so anything that counts, serves, or trusts an original goes through here.
+ *
+ * `expectedSize` comes from `uploads.size`. Omitting it falls back to a
+ * plain existence check, which is only appropriate for callers that are
+ * about to validate the bytes themselves.
+ */
+function getValidOriginalPath(uuid, expectedSize) {
+  const p = getOriginalPath(uuid);
+  if (!p) return null;
+  if (!expectedSize) return p;
+  try {
+    return fs.statSync(p).size === expectedSize ? p : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Save a buffer as the original for a uuid. Used by backfill cron. */
 function preserveOriginalFromBuffer(buffer, uuid) {
   ensureDir();
@@ -56,4 +81,4 @@ function getOptimizedPath(uuid) {
   return fs.existsSync(p) ? p : null;
 }
 
-module.exports = { preserveOriginal, preserveOriginalFromBuffer, getOriginalPath, getOptimizedPath, ORIGINALS_DIR };
+module.exports = { preserveOriginal, preserveOriginalFromBuffer, getOriginalPath, getValidOriginalPath, getOptimizedPath, ORIGINALS_DIR };

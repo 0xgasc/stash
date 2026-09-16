@@ -633,11 +633,15 @@ const _getAllUploadsForBackfill = db.prepare(`
   ORDER BY created_at ASC
 `);
 function getUploadsWithoutOriginals({ limit = 25 } = {}) {
-  const { getOriginalPath } = require('./utils/originals');
+  const { getValidOriginalPath } = require('./utils/originals');
   const all = _getAllUploadsForBackfill.all();
   const missing = [];
   for (const row of all) {
-    if (!getOriginalPath(row.uuid)) missing.push(row);
+    // Byte-validated, not existence-checked: a volume "original" that is the
+    // gateway's HTML error page is not an original, and treating it as one is
+    // what stopped the backfill cron from ever re-attempting (or flagging)
+    // the 143 files lost in the 2026-09 corruption wave.
+    if (!getValidOriginalPath(row.uuid, row.size)) missing.push(row);
     if (missing.length >= limit) break;
   }
   return missing;
@@ -655,15 +659,19 @@ function resetAllBackfillSkipped() {
 }
 
 function getBackfillStats() {
-  const { getOriginalPath } = require('./utils/originals');
-  const all = db.prepare('SELECT uuid, backfill_skipped FROM uploads').all();
-  let withOriginal = 0, missing = 0, skipped = 0;
+  const { getOriginalPath, getValidOriginalPath } = require('./utils/originals');
+  const all = db.prepare('SELECT uuid, size, backfill_skipped FROM uploads').all();
+  let withOriginal = 0, missing = 0, skipped = 0, corrupt = 0;
   for (const row of all) {
-    if (getOriginalPath(row.uuid)) withOriginal++;
+    if (getValidOriginalPath(row.uuid, row.size)) withOriginal++;
     else if (row.backfill_skipped) skipped++;
+    // Volume copy exists but the bytes are wrong (the gateway's HTML app
+    // shell). Reported separately from `missing` so the operator can see
+    // "this file is already gone" rather than "this file has no local copy".
+    else if (getOriginalPath(row.uuid)) corrupt++;
     else missing++;
   }
-  return { total: all.length, withOriginal, missing, skipped };
+  return { total: all.length, withOriginal, missing, corrupt, skipped };
 }
 
 const _setRefreshSkipped = db.prepare(`

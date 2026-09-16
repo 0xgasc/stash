@@ -460,6 +460,47 @@ function serveFileWithRange(req, res, filePath, contentType, cacheControl) {
 }
 
 // =====================================================
+// LOCAL COPY SELECTION — byte-counted, not existence-checked
+// =====================================================
+// The gateway's eviction error page is a ~4904-byte HTML app shell that
+// arrives with HTTP 200, so anything that saved or served whatever the
+// gateway returned ended up with a "file" that was really an error page.
+// 143 uploads from the 2026-09 corruption wave still have one sitting on
+// the volume under their uuid, and serving it handed consumers HTTP 200
+// plus HTML for a file that no longer exists. Byte count is the only
+// reliable signal we have, so a local copy is only served when its size
+// matches what the DB recorded at upload time.
+//
+// `lost` means we have a local copy and it is provably not the file —
+// the honest answer there is 410 Gone, never a 302 to the gateway (the
+// gateway is where the error page came from).
+function pickLocalCopy(upload) {
+  const { getOriginalPath, getValidOriginalPath, getOptimizedPath } = require('./utils/originals');
+  // The optimized copy is a faststart remux we generated ourselves and has
+  // a byte count of its own, so it is not comparable to uploads.size.
+  const optimized = getOptimizedPath(upload.uuid);
+  if (optimized) return { filePath: optimized, optimized: true, lost: false };
+
+  const original = getValidOriginalPath(upload.uuid, upload.size);
+  if (original) return { filePath: original, optimized: false, lost: false };
+
+  return {
+    filePath: null,
+    optimized: false,
+    lost: !!upload.size && !!getOriginalPath(upload.uuid),
+  };
+}
+
+function sendGone(res, upload, detail) {
+  res.set('Cache-Control', 'no-store');
+  return res.status(410).send(
+    `Gone: the archived copy of ${upload.uuid} was lost and cannot be restored.\n` +
+    `${detail}\n` +
+    'Recorded size: ' + (upload.size ?? 'unknown') + ' bytes\n'
+  );
+}
+
+// =====================================================
 // STABLE PUBLIC REDIRECT
 // /f/:uuid → 302 to the gateway URL (chain-first).
 // Gateway serves from Arweave/Irys — free, permanent, decentralized.
@@ -472,14 +513,13 @@ app.get('/f/:uuid', (req, res) => {
   const upload = getUploadById(uuid);
   if (!upload) return res.status(404).send('Not found');
   res.set('Access-Control-Allow-Origin', '*');
-  const { getOriginalPath, getOptimizedPath } = require('./utils/originals');
-  const optimized = getOptimizedPath(uuid);
-  const filePath = optimized || getOriginalPath(uuid);
+  const { filePath, optimized, lost } = pickLocalCopy(upload);
   if (filePath) {
     const ct = optimized ? 'video/mp4' : (upload.content_type || 'application/octet-stream');
     return serveFileWithRange(req, res, filePath, ct,
       'public, max-age=86400, stale-while-revalidate=604800');
   }
+  if (lost) return sendGone(res, upload, 'The stored copy is not the file that was uploaded.');
   if (upload.irys_url) {
     res.set('Cache-Control', 'no-store');
     return res.redirect(302, upload.irys_url);
@@ -499,8 +539,8 @@ app.get('/f/:uuid/meta', (req, res) => {
   res.set('Cache-Control', 'public, max-age=60');
   const baseUrl = `${req.protocol}://${req.get('host')}`;
   const isVideo = upload.content_type && upload.content_type.startsWith('video/');
-  const { getOriginalPath, getOptimizedPath } = require('./utils/originals');
-  const hasLocal = !!getOptimizedPath(upload.uuid) || !!getOriginalPath(upload.uuid);
+  const { filePath, lost } = pickLocalCopy(upload);
+  const hasLocal = !!filePath;
   let contentUrl;
   if (isVideo && hasLocal) {
     contentUrl = `${baseUrl}/f/${upload.uuid}/raw`;
@@ -515,7 +555,12 @@ app.get('/f/:uuid/meta', (req, res) => {
     title: upload.title || null,
     caption: upload.caption || null,
     created_at: upload.created_at,
-    content_url: contentUrl,
+    // 'gone' means the archive copy is provably not this file any more.
+    // content_url is nulled rather than pointed at the gateway, because the
+    // gateway answers 200 with an HTML error page for a file like this —
+    // exactly the signal a consumer cannot afford to trust.
+    status: lost ? 'gone' : 'ok',
+    content_url: lost ? null : contentUrl,
   });
 });
 
@@ -526,10 +571,11 @@ app.get('/f/:uuid/raw', (req, res) => {
   if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).send('Invalid id');
   const upload = getUploadById(uuid);
   if (!upload) return res.status(404).send('Not found');
-  const { getOriginalPath, getOptimizedPath } = require('./utils/originals');
-  const optimized = getOptimizedPath(uuid);
-  const filePath = optimized || getOriginalPath(uuid);
-  if (!filePath) return res.status(404).send('Original not preserved');
+  const { filePath, optimized, lost } = pickLocalCopy(upload);
+  if (!filePath) {
+    if (lost) return sendGone(res, upload, 'The stored copy is not the file that was uploaded.');
+    return res.status(404).send('Original not preserved');
+  }
   res.set('Access-Control-Allow-Origin', '*');
   const ct = optimized ? 'video/mp4' : (upload.content_type || 'application/octet-stream');
   res.set('Content-Disposition', `inline; filename="${upload.filename || uuid}"`);
@@ -541,15 +587,21 @@ app.get('/f/:uuid/raw', (req, res) => {
 // has a different byte count and content-type than the original, so
 // integrators that verify `size` on read-back (UMO's HD archive) or need
 // the source container must come here. Never falls back to the gateway:
-// a 404 here means the archive copy is missing, which is the signal.
+// a 404 here means the archive copy is missing, and a 410 means the copy
+// we hold is provably not the file (do not treat either as success).
 app.get('/f/:uuid/original', (req, res) => {
   const { uuid } = req.params;
   if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) return res.status(400).send('Invalid id');
   const upload = getUploadById(uuid);
   if (!upload) return res.status(404).send('Not found');
-  const { getOriginalPath } = require('./utils/originals');
-  const filePath = getOriginalPath(uuid);
-  if (!filePath) return res.status(404).send('Original not preserved');
+  const { getValidOriginalPath, getOriginalPath } = require('./utils/originals');
+  const filePath = getValidOriginalPath(uuid, upload.size);
+  if (!filePath) {
+    if (upload.size && getOriginalPath(uuid)) {
+      return sendGone(res, upload, 'The stored copy is not the file that was uploaded.');
+    }
+    return res.status(404).send('Original not preserved');
+  }
   res.set('Access-Control-Allow-Origin', '*');
   const safeName = String(upload.filename || uuid).replace(/["\r\n]/g, '');
   res.set('Content-Disposition', `inline; filename="${safeName}"`);
