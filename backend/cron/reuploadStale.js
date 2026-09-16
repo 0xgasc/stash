@@ -8,8 +8,8 @@
  */
 const fs = require('fs');
 const path = require('path');
-const { getUploadsWithoutOriginals, markBackfillSkipped, startCronRun, finishCronRun } = require('../db');
-const { getOriginalPath, preserveOriginalFromBuffer, ORIGINALS_DIR } = require('../utils/originals');
+const { getUploadsWithoutOriginals, getBackfillStats, markBackfillSkipped, startCronRun, finishCronRun } = require('../db');
+const { preserveOriginalFromBuffer } = require('../utils/originals');
 
 const RUN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 2 * 60 * 1000;
@@ -63,9 +63,16 @@ async function runOnce() {
   try {
     const missing = getUploadsWithoutOriginals({ limit: MAX_PER_RUN });
     if (missing.length === 0) {
-      console.log('🕓 Backfill cron: all uploads have originals');
+      // "Nothing left to retry" is not the same as "everything is fine".
+      // Rows the cron has already given up on are still gone, so report the
+      // real split instead of claiming every upload has an original.
+      const stats = getBackfillStats();
+      console.log(
+        `🕓 Backfill cron: nothing to retry — ${stats.withOriginal}/${stats.total} have a byte-valid original, ` +
+        `${stats.skipped} acknowledged lost, ${stats.corrupt} corrupt awaiting retry`
+      );
     } else {
-      console.log(`🕓 Backfill cron: ${missing.length} upload(s) missing originals`);
+      console.log(`🕓 Backfill cron: ${missing.length} upload(s) without a byte-valid original`);
     }
 
     for (const { uuid, filename, arweave_id, irys_url, size } of missing) {

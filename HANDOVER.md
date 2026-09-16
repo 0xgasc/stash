@@ -444,6 +444,7 @@ Consumers should store `/f/:uuid` URLs, never raw gateway URLs.
 |------|-----|
 | Faucet Sepolia to wallet | Current balance covers ~1 more refresh cycle. After that, refreshes stall. |
 | Rotate Stripe + Recurrente keys | Leaked in chat 2026-05-28. Must rotate before going live with payments. |
+| Vercel git deploys never start | Every production deployment triggered by a push since 2026-08-25 sits in **Canceled** with a 0ms build — the build never runs, so the live aliases stay on the old deployment. The site was 22 days stale on 2026-09-16 (aliases `aeter-eight.vercel.app` and `stash.offsetworks.xyz` pointed at a 2026-08-25 build) even though Railway was current. A manual `vercel --prod` from the repo root built in 1m and took the aliases, so the code is fine and this is a Git-integration/config problem — check the project's Git connection and Ignored Build Step in the Vercel dashboard. **Until it is fixed, `git push` does NOT ship the frontend: run `vercel --prod` after pushing.** |
 
 ### Important
 
@@ -482,7 +483,11 @@ cd backend && npm test
 
 ```bash
 git add -A && git commit -m "..." && git push origin main
-# Both Vercel and Railway auto-deploy from main
+# Railway auto-deploys from main (verified working).
+# Vercel does NOT: git-triggered production deploys have been sitting in
+# "Canceled" with a 0ms build since 2026-08-25, so follow the push with a
+# manual production deploy or the frontend stays on the old build:
+vercel --prod --yes     # from the repo root; ~1 min
 ```
 
 ### "Refreshes are failing"
