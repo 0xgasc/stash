@@ -18,6 +18,7 @@ const {
 } = require('../db');
 const { uploadFileToIrysFromPath } = require('../utils/irysUploader');
 const { reuploadFromExisting } = require('../utils/reupload');
+const { mintUploadToken } = require('../utils/uploadToken');
 const { requireApiKey, requireAdminSecret } = require('../middleware/apiAuth');
 const { getClientInfo } = require('../utils/clientInfo');
 const { scheduleGeoLookup } = require('../utils/geo');
@@ -54,6 +55,49 @@ const reuploadLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   validate: { ip: false },
+});
+
+// =====================================================
+// POST /tus-token — mint a short-lived browser upload token (requires API key)
+// =====================================================
+// The tenant's server calls this with its REAL API key (kept server-side, never
+// in a browser bundle). It returns an opaque, expiring token the browser sends
+// on the TUS requests via the X-Upload-Token header. The token is signed with
+// ADMIN_BACKEND_SECRET, which lives only on Stash and is never shared, so a
+// stolen token is a few minutes of upload access to ONE tenant — not the API key.
+router.post('/tus-token', requireApiKey, (req, res) => {
+  try {
+    const body = req.body || {};
+    const maxBytes = Number(body.maxBytes) || undefined;
+    const expiresInMinutes = req.body.expiresInMinutes !== undefined
+      ? Number(req.body.expiresInMinutes)
+      : undefined;
+    const source = typeof body.source === 'string' && body.source.trim()
+      ? body.source.trim()
+      : req.apiKey.name;
+    const allowedExtensions = Array.isArray(body.allowedExtensions)
+      ? body.allowedExtensions
+      : undefined;
+
+    const minted = mintUploadToken({
+      apiKeyId: req.apiKey.id,
+      source,
+      maxBytes,
+      expiresInMinutes,
+      extensions: allowedExtensions,
+    });
+
+    res.json({
+      token: minted.token,
+      expires_at: new Date(minted.exp * 1000).toISOString(),
+      expires_in_seconds: Math.round(minted.exp - Date.now() / 1000),
+      max_bytes: minted.maxBytes,
+      source: minted.source,
+      allowed_extensions: minted.extensions,
+    });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
 });
 
 // =====================================================

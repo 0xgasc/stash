@@ -251,6 +251,42 @@ SQLite via `better-sqlite3`, stored on Railway volume. Migrations auto-apply on 
 - Admin: HMAC cookie OR `users.is_admin` flag
 - User auth: magic-link via Resend, signed httpOnly cookie with user ID
 
+### Tenant Upload Tokens (browser uploads without shipping the API key)
+
+External tenants (FlyIn, etc.) cannot put their Stash API key in a public JS
+bundle — anyone could extract it and upload on the tenant's account. Instead:
+
+1. The tenant's **server** calls `POST /api/v1/tus-token` with its real
+   `X-API-Key`. It gets back an opaque, expiring token. Request body (all
+   optional): `source`, `maxBytes`, `allowedExtensions`, `expiresInMinutes`
+   (1–60, default 15). Response:
+   `{ token, expires_at, expires_in_seconds, max_bytes, source, allowed_extensions }`.
+   The token is HMAC-SHA256 signed with `ADMIN_BACKEND_SECRET` — server-only,
+   never shared with the tenant or the browser, so it cannot be forged.
+2. The browser sends that token on the TUS upload via the **`X-Upload-Token`**
+   header (every `POST`/`PATCH`/`HEAD` request and the `POST /tus-upload/complete`
+   call — same header `tus-js-client` sends from its `headers` option).
+
+Enforcement (all in `server.js`, secrets/caps in `utils/uploadToken.js`):
+- Invalid/expired token → `401`; create with `Upload-Length` > token cap → `413`.
+- A token is **bound to the one upload** it created (map in `server.js`), so it
+  cannot be replayed across many files. PATCH/HEAD on a tokenized upload without
+  the matching token → `401`.
+- At `/complete` the real byte count and filename extension are checked against
+  the token's caps → `413` before any Irys credit is spent. A token upload
+  bypasses the anonymous IP quota (like an API key holder) and records
+  `source` = token's `source`, `api_key_id` = the minting key — the browser
+  cannot spoof attribution via the request body.
+- TUS creation-with-upload works (POST with `Upload-Length` + `Upload-Metadata`);
+  `tus-js-client`'s standard create-then-PATCH also works. Content-type is
+  derived from the filename extension server-side; restrict via
+  `allowedExtensions` (normalized, no dots, lowercase).
+
+`REUPLOAD_MAX_*`/quota config do not change. Regression harness:
+`backend/scripts/e2e-token-upload.sh` fires the whole flow against a throwaway
+DB (bogus-token 401, oversize 413, binding on PATCH, type-cap at complete) with
+no Irys spend. `backend/test/upload-token.test.js` covers the token logic.
+
 ## Utils (`backend/utils/`)
 
 | File | Purpose |

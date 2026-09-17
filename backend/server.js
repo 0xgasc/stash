@@ -33,6 +33,7 @@ const { isSafeTusId, sanitizeFilename } = require('./utils/sanitize');
 const { checkUploadQuota } = require('./utils/quota');
 const { preserveOriginal } = require('./utils/originals');
 const { optimizeAndUpload } = require('./utils/videoOptimize');
+const { verifyToken, checkTokenCaps } = require('./utils/uploadToken');
 
 const TRUSTED_HEADER = 'x-admin-secret';
 const ADMIN_BACKEND_SECRET = process.env.ADMIN_BACKEND_SECRET;
@@ -81,6 +82,11 @@ console.log(`📁 Tus upload directory: ${tusUploadDir}`);
 // Track completed uploads
 const completedTusUploads = new Map();
 
+// Token-scoped uploads (created via POST /api/v1/tus-token). Holds the verified
+// caps/source for each upload id so PATCH/HEAD and /complete can enforce them.
+// Mirrors completedTusUploads in scope + lifetime (in-memory, per-process).
+const tokenizedUploads = new Map();
+
 // =====================================================
 // TUS SERVER (lazy init — ESM imports)
 // =====================================================
@@ -113,8 +119,20 @@ async function initTusServer() {
       });
     });
 
-    tusServer.on(EVENTS.POST_CREATE, (req, res, upload) => {
-      console.log(`📤 Tus upload started: ${upload.id}`);
+    tusServer.on(EVENTS.POST_CREATE, (req, upload, url) => {
+      // NOTE: POST_CREATE's args are (req, upload, url) — `url` is the Location
+      // of the new upload. Derive the id from it; `upload.id` is undefined here.
+      const id = String(url || '').split('?')[0].split('/').filter(Boolean).pop() || (upload && upload.id);
+      console.log(`📤 Tus upload started: ${id}`);
+      // The `req` here is @tus/server's NodeRequest wrapper (srvx), not the
+      // express request we attached tokenCtx to. Recover the original request
+      // through the node runtime handle so we can bind the token to this id.
+      const raw = (req && req.runtime && req.runtime.node && req.runtime.node.req)
+        || (req && req.node && req.node.req)
+        || req;
+      if (raw && raw.tokenCtx && id) {
+        tokenizedUploads.set(id, { ...raw.tokenCtx });
+      }
     });
 
     console.log('✅ Tus server initialized');
@@ -140,7 +158,7 @@ app.use(cors({
     'Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin',
     'Cache-Control', 'Pragma',
     // Auth headers
-    'X-API-Key', 'X-Admin-Secret',
+    'X-API-Key', 'X-Admin-Secret', 'X-Upload-Token',
     // TUS protocol headers
     'Upload-Length', 'Upload-Offset', 'Tus-Resumable', 'Upload-Metadata',
     'Upload-Defer-Length', 'Upload-Concat', 'X-HTTP-Method-Override',
@@ -176,12 +194,22 @@ const uploadLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   skip: (req) => {
+    // A valid API key bypasses the hourly cap (external integrations).
     const apiKey = req.headers['x-api-key'];
-    if (!apiKey) return false;
-    const hash = require('crypto').createHash('sha256').update(apiKey).digest('hex');
-    const { findApiKeyByHash } = require('./db');
-    const found = findApiKeyByHash(hash);
-    return !!found;
+    if (apiKey) {
+      const hash = require('crypto').createHash('sha256').update(apiKey).digest('hex');
+      const { findApiKeyByHash } = require('./db');
+      const found = findApiKeyByHash(hash);
+      if (found) return true;
+    }
+    // A valid upload token bypasses it too — minted via an API key, so it has
+    // already proven tenant credentials (and a browser must not send the key).
+    const uploadToken = req.headers['x-upload-token'];
+    if (uploadToken) {
+      const v = require('./utils/uploadToken').verifyToken(uploadToken);
+      return v.ok;
+    }
+    return false;
   },
   handler: (req, res /*, next, options */) => {
     setTusCorsHeaders(req, res);
@@ -206,7 +234,7 @@ function setTusCorsHeaders(req, res) {
   res.header('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.header('Access-Control-Allow-Methods', 'POST, GET, HEAD, PATCH, DELETE, OPTIONS');
   res.header('Access-Control-Allow-Headers',
-    'Authorization, Content-Type, Upload-Length, Upload-Offset, Tus-Resumable, Upload-Metadata, Upload-Defer-Length, Upload-Concat, X-HTTP-Method-Override, X-Requested-With');
+    'Authorization, Content-Type, Upload-Length, Upload-Offset, Tus-Resumable, Upload-Metadata, Upload-Defer-Length, Upload-Concat, X-HTTP-Method-Override, X-Requested-With, X-Upload-Token');
   res.header('Access-Control-Expose-Headers',
     'Upload-Offset, Location, Upload-Length, Tus-Version, Tus-Resumable, Tus-Max-Size, Tus-Extension, Upload-Metadata, Upload-Defer-Length, Upload-Concat');
   Object.entries(TUS_CORS_HEADERS).forEach(([k, v]) => res.header(k, v));
@@ -217,6 +245,25 @@ app.all('/tus-upload', uploadLimiter, async (req, res) => {
   setTusCorsHeaders(req, res);
   if (req.method === 'OPTIONS') return res.sendStatus(204);
 
+  // Optional short-lived upload token (X-Upload-Token). When present it must
+  // be valid, and on create it must not exceed the token's size cap. Resume
+  // (HEAD/PATCH on /tus-upload/:id) is enforced in the :id route below.
+  const uploadToken = req.headers['x-upload-token'];
+  if (uploadToken) {
+    const v = verifyToken(uploadToken);
+    if (!v.ok) return res.status(401).json({ error: 'Invalid or expired upload token' });
+    if (req.method === 'POST') {
+      req.tokenCtx = { ...v.payload, token: v.token };
+      const uploadLength = Number(req.headers['upload-length']);
+      if (Number.isFinite(uploadLength) && uploadLength > v.payload.mb) {
+        res.header('Tus-Max-Size', String(v.payload.mb));
+        return res.status(413).json({
+          error: `Upload (${uploadLength} bytes) exceeds this token's size cap of ${v.payload.mb} bytes`,
+        });
+      }
+    }
+  }
+
   try {
     await initTusServer();
     return tusServer.handle(req, res);
@@ -226,13 +273,23 @@ app.all('/tus-upload', uploadLimiter, async (req, res) => {
   }
 });
 
-// Individual upload chunks (PATCH/HEAD/DELETE for /tus-upload/:id)
+// /tus-upload/:id — PATCH/HEAD/DELETE individual uploads (token-scoped check)
 app.all('/tus-upload/:id', async (req, res, next) => {
   // Skip to completion handler
   if (req.params.id === 'complete') return next();
 
   setTusCorsHeaders(req, res);
   if (req.method === 'OPTIONS') return res.sendStatus(204);
+
+  const bound = tokenizedUploads.get(req.params.id);
+  if (bound) {
+    const uploadToken = req.headers['x-upload-token'];
+    if (!uploadToken) return res.status(401).json({ error: 'Upload token required' });
+    const v = verifyToken(uploadToken);
+    if (!v.ok || v.token !== bound.token) {
+      return res.status(401).json({ error: 'Invalid or mismatched upload token' });
+    }
+  }
 
   try {
     await initTusServer();
@@ -277,6 +334,23 @@ app.post('/tus-upload/complete', async (req, res) => {
         }
       }
     }
+    // Token-scoped upload? Resolve and enforce binding before any Irys spend.
+    // A valid token grants the same privileges as the minting API key: it
+    // bypasses the anonymous quota and attributes the upload to the tenant.
+    let tokenCtx = null;
+    const uploadTokenHeader = req.headers['x-upload-token'];
+    if (uploadTokenHeader) {
+      const v = verifyToken(uploadTokenHeader);
+      if (!v.ok) return res.status(401).json({ error: 'Invalid or expired upload token' });
+      const bound = tokenizedUploads.get(uploadId);
+      if (!bound || bound.token !== v.token) {
+        return res.status(401).json({ error: 'Upload token is not bound to this upload' });
+      }
+      tokenCtx = bound;
+      resolvedApiKey = { id: tokenCtx.k, name: tokenCtx.source };
+    }
+    const effectiveSource = tokenCtx ? tokenCtx.source : (req.body.source || 'web');
+
     if (!resolvedApiKey) {
       const clientIp = getClientInfo(req).ip_address;
       const quota = checkUploadQuota(ctxEarly.user_id, clientIp);
@@ -295,6 +369,12 @@ app.post('/tus-upload/complete', async (req, res) => {
       if (fs.existsSync(possiblePath)) {
         console.log(`   ⚠️ Upload not in map but found on disk: ${possiblePath}`);
         const stat = fs.statSync(possiblePath);
+        // Enforce the token's size + type caps on the actual bytes before
+        // burning any Irys credit.
+        if (tokenCtx) {
+          const caps = checkTokenCaps(tokenCtx, { size: stat.size, filename: originalFilename });
+          if (!caps.ok) return res.status(413).json({ error: caps.error });
+        }
         // Proceed with file found on disk
         console.log('🚀 Uploading to Irys (from disk fallback)...');
         const result = await uploadFileToIrysFromPath(possiblePath, originalFilename);
@@ -302,7 +382,7 @@ app.post('/tus-upload/complete', async (req, res) => {
 
         const ctx = trustedUserContext(req);
         const dbRecord = insertUpload({
-          source: req.body.source || 'web',
+          source: effectiveSource,
           filename: result.filename,
           content_type: result.contentType,
           size: result.size || stat.size,
@@ -320,6 +400,7 @@ app.post('/tus-upload/complete', async (req, res) => {
         // Keep the original on the volume so future re-uploads never
         // depend on a possibly-evicted gateway URL.
         preserveOriginal(possiblePath, dbRecord.uuid);
+        tokenizedUploads.delete(uploadId);
         try {
           const metadataPath = possiblePath + '.json';
           if (fs.existsSync(metadataPath)) fs.unlinkSync(metadataPath);
@@ -370,16 +451,24 @@ app.post('/tus-upload/complete', async (req, res) => {
       return res.status(404).json({ error: 'Upload file not found on server' });
     }
 
+    // Enforce the token's size + type caps on the actual bytes before burning
+    // any Irys credit.
+    if (tokenCtx) {
+      const caps = checkTokenCaps(tokenCtx, { size: uploadInfo.size, filename: originalFilename });
+      if (!caps.ok) return res.status(413).json({ error: caps.error });
+    }
+
     // Upload to Irys
     console.log('🚀 Uploading to Irys...');
     const result = await uploadFileToIrysFromPath(uploadInfo.filePath, originalFilename);
     console.log(`✅ Irys upload complete: ${result.url}`);
 
     completedTusUploads.delete(uploadId);
+    tokenizedUploads.delete(uploadId);
 
     const ctx = trustedUserContext(req);
     const dbRecord = insertUpload({
-      source: req.body.source || 'web',
+      source: effectiveSource,
       filename: result.filename,
       content_type: result.contentType,
       size: result.size,
