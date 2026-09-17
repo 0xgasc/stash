@@ -409,6 +409,22 @@ migrate(14, 'refresh_skipped flag to opt files out of devnet refresh', () => {
   `);
 });
 
+migrate(15, 'evictions — record when a devnet copy is found wrong', () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS evictions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      upload_uuid TEXT NOT NULL,
+      source TEXT,
+      expected_size INTEGER,
+      found_size INTEGER,
+      age_days INTEGER,
+      detected_at TEXT NOT NULL DEFAULT (datetime('now')),
+      repaired INTEGER DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS idx_evictions_detected ON evictions(detected_at);
+  `);
+});
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -617,7 +633,7 @@ function findStaleUploads({ olderThanDays = 50, limit = 25 } = {}) {
 // Everything the verify sweep needs to check a devnet copy and, if it's
 // wrong, hand the row straight to reuploadFromExisting().
 const _getLiveUploadsForVerify = db.prepare(`
-  SELECT uuid, filename, irys_url, arweave_id, size
+  SELECT uuid, filename, irys_url, arweave_id, size, source, created_at, last_reuploaded_at
   FROM uploads
   WHERE refresh_skipped = 0 AND irys_url IS NOT NULL AND size > 0
   ORDER BY created_at ASC
@@ -841,6 +857,61 @@ function getStats() {
             })),
           };
         }
+
+// =====================================================
+// EVICTIONS — when devnet copies are found wrong
+// =====================================================
+// The verify sweep probes every live devnet copy daily. When one comes back
+// wrong (evicted or corrupt), we record it here with the file's age at
+// detection — that age is the real retention measurement, and the per-day
+// counts are the "when do clips get deleted" curve. The copy is then
+// repaired from the volume original, so the link keeps working.
+const _insertEviction = db.prepare(`
+  INSERT INTO evictions (upload_uuid, source, expected_size, found_size, age_days, repaired)
+  VALUES (@upload_uuid, @source, @expected_size, @found_size, @age_days, @repaired)
+`);
+function recordEviction({ upload_uuid, source, expected_size, found_size, age_days, repaired = 0 }) {
+  _insertEviction.run({
+    upload_uuid, source, expected_size, found_size, age_days,
+    repaired: repaired ? 1 : 0,
+  });
+}
+
+const _markEvictionRepaired = db.prepare(`
+  UPDATE evictions SET repaired = 1
+  WHERE id = (SELECT id FROM evictions WHERE upload_uuid = ? ORDER BY detected_at DESC, id DESC LIMIT 1)
+`);
+function markEvictionRepaired(upload_uuid) {
+  _markEvictionRepaired.run(upload_uuid);
+}
+
+const _evictionsByDay = db.prepare(`
+  SELECT DATE(detected_at) AS day, COUNT(*) AS n
+  FROM evictions
+  WHERE detected_at >= datetime('now', @cutoff)
+  GROUP BY day ORDER BY day ASC
+`);
+const _evictionsAge = db.prepare(`
+  SELECT MIN(age_days) AS min_age, MAX(age_days) AS max_age, AVG(age_days) AS avg_age, COUNT(*) AS n
+  FROM evictions
+`);
+const _evictionsRecent = db.prepare(`
+  SELECT upload_uuid, source, expected_size, found_size, age_days, detected_at, repaired
+  FROM evictions ORDER BY detected_at DESC, id DESC LIMIT @limit
+`);
+function getEvictionStats({ days = 30, limit = 20 } = {}) {
+  const byDay = _evictionsByDay.all({ cutoff: `-${days} days` });
+  const age = _evictionsAge.get();
+  const recent = _evictionsRecent.all({ limit });
+  return {
+    total: age.n,
+    minAgeDays: age.min_age,
+    maxAgeDays: age.max_age,
+    avgAgeDays: age.avg_age ? Math.round(age.avg_age * 10) / 10 : null,
+    byDay,
+    recent,
+  };
+}
 
 // =====================================================
 // USERS
@@ -1715,7 +1786,10 @@ module.exports = {
   findApiKeyByHash,
   updateApiKeyLastUsed,
   getStats,
-  getCostSeries,
+    getCostSeries,
+  recordEviction,
+  markEvictionRepaired,
+  getEvictionStats,
   // users
   upsertUser, getUserById, getUserByAuthId, getUserByHandle, isReservedHandle,
   claimHandle, updateUserProfile,

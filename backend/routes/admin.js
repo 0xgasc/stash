@@ -303,4 +303,47 @@ router.post('/uploads/bulk-skip-refresh', (req, res) => {
     res.json(getCostSeries());
   });
 
+  // GET /evictions — retention measurement: when devnet copies were found wrong
+  router.get('/evictions', (req, res) => {
+    const { getEvictionStats } = require('../db');
+    const days = Math.min(parseInt(req.query.days, 10) || 30, 365);
+    const limit = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+    res.json(getEvictionStats({ days, limit }));
+  });
+
+  // GET /link-health?uuid=... — probe ONE devnet copy and report if it's alive.
+  // This is the "does this old link still work" check: asks devnet for one byte
+  // and compares the reported total length to uploads.size (the only signal that
+  // distinguishes a live file from the gateway's HTML error page).
+  router.get('/link-health', async (req, res) => {
+    const { getUploadById } = require('../db');
+    const uuid = String(req.query.uuid || '').trim();
+    if (!/^[A-Za-z0-9-]{8,64}$/.test(uuid)) {
+      return res.status(400).json({ error: 'Invalid uuid' });
+    }
+    const upload = getUploadById(uuid);
+    if (!upload) return res.status(404).json({ error: 'Upload not found' });
+    if (!upload.irys_url) {
+      return res.json({ uuid, source: upload.source, filename: upload.filename, size: upload.size, status: 'no_gateway_url' });
+    }
+    try {
+      const r = await fetch(upload.irys_url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(20_000) });
+      if (!r.ok && r.status !== 206) {
+        return res.json({ uuid, source: upload.source, filename: upload.filename, size: upload.size, status: 'http_' + r.status, checked_at: new Date().toISOString() });
+      }
+      const cr = r.headers.get('content-range');
+      const total = cr ? Number(cr.split('/')[1]) : Number(r.headers.get('content-length'));
+      if (!Number.isFinite(total)) {
+        return res.json({ uuid, source: upload.source, filename: upload.filename, size: upload.size, status: 'no_length', checked_at: new Date().toISOString() });
+      }
+      const status = total === upload.size ? 'alive' : (total < 10000 ? 'evicted' : 'mismatch');
+      return res.json({
+        uuid, source: upload.source, filename: upload.filename,
+        size: upload.size, devnet_size: total, status, checked_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      return res.json({ uuid, source: upload.source, filename: upload.filename, size: upload.size, status: 'error', error: err.message, checked_at: new Date().toISOString() });
+    }
+  });
+
   module.exports = router;

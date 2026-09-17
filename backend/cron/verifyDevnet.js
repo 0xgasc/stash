@@ -14,7 +14,7 @@
  * "Wrong" means the reported total length differs from uploads.size —
  * the same check that would have caught the HTML-shell corruption.
  */
-const { getLiveUploadsForVerify, updateUploadAfterReupload, startCronRun, finishCronRun } = require('../db');
+const { getLiveUploadsForVerify, updateUploadAfterReupload, recordEviction, startCronRun, finishCronRun } = require('../db');
 const { reuploadFromExisting } = require('../utils/reupload');
 const { sendAlert } = require('../utils/alerts');
 
@@ -64,16 +64,32 @@ async function runOnce() {
     }));
 
     if (bad.length === 0) {
-      console.log(`🔎 Verify sweep: ${checked} devnet copies checked, all intact`);
-    } else {
-      console.log(`🔎 Verify sweep: ${bad.length} of ${checked} devnet copies wrong — repairing from archive`);
-    }
+          console.log(`🔎 Verify sweep: ${checked} devnet copies checked, all intact`);
+        } else {
+          console.log(`🔎 Verify sweep: ${bad.length} of ${checked} devnet copies wrong — repairing from archive`);
+        }
 
-    for (const { rec, why } of bad.slice(0, REPAIR_MAX_PER_RUN)) {
-      try {
-        const result = await reuploadFromExisting(rec);
-        updateUploadAfterReupload(rec.uuid, result.url, result.id, 'verify-repair', result.priceWei);
-        repaired++;
+        // Record every eviction found — this is the retention measurement. The age
+        // at detection is the real "how long did devnet actually keep it" number.
+        const ageOf = (rec) => {
+          const last = rec.last_reuploaded_at || rec.created_at;
+          if (!last) return null;
+          const t = new Date(String(last).replace(' ', 'T') + 'Z').getTime();
+          return Number.isFinite(t) ? Math.max(0, Math.floor((Date.now() - t) / 86400000)) : null;
+        };
+        for (const { rec } of bad) {
+          recordEviction({
+            upload_uuid: rec.uuid, source: rec.source, expected_size: rec.size,
+            found_size: null, age_days: ageOf(rec), repaired: 0,
+          });
+        }
+
+        for (const { rec, why } of bad.slice(0, REPAIR_MAX_PER_RUN)) {
+          try {
+            const result = await reuploadFromExisting(rec);
+            updateUploadAfterReupload(rec.uuid, result.url, result.id, 'verify-repair', result.priceWei);
+            markEvictionRepaired(rec.uuid);
+            repaired++;
         console.log(`🔧 Repaired ${rec.filename} (${rec.uuid}): ${why} → ${result.id}`);
       } catch (err) {
         repairFailed++;

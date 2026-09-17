@@ -23,6 +23,7 @@ import HealthBanner from './components/HealthBanner'
 import AdminUsersPanel from './components/AdminUsersPanel'
 import AdminPlansPanel from './components/AdminPlansPanel'
 import CostChart from './components/CostChart'
+import RefreshHealth from './components/RefreshHealth'
 
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
@@ -562,6 +563,7 @@ export default function AdminPage() {
             {active === 'overview' && (
               <div className="space-y-8">
                 <HealthBanner authenticated={authenticated} />
+                <RefreshHealth authenticated={authenticated} />
                 <CostChart authenticated={authenticated} />
                 <ExpiringSoon authenticated={authenticated} />
                 <CronStatus authenticated={authenticated} />
