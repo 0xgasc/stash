@@ -13,7 +13,7 @@
 import { useState, useEffect } from 'react'
 import Link from 'next/link'
 import * as tus from 'tus-js-client'
-import { Loader2, RefreshCw, Lock, Wallet, Database, LogOut, Settings, Save, AlertTriangle, Upload, CheckCircle, Copy, ExternalLink, RotateCcw, ArrowDown } from 'lucide-react'
+import { Loader2, RefreshCw, Lock, Wallet, Database, LogOut, Settings, Save, AlertTriangle, Upload, CheckCircle, Copy, ExternalLink, RotateCcw, ArrowDown, LayoutDashboard, Users, CreditCard, KeyRound, Activity, Gauge } from 'lucide-react'
 import UploadStats from './components/UploadStats'
 import UploadHistory from './components/UploadHistory'
 import ApiKeyManager from './components/ApiKeyManager'
@@ -22,6 +22,7 @@ import CronStatus from './components/CronStatus'
 import HealthBanner from './components/HealthBanner'
 import AdminUsersPanel from './components/AdminUsersPanel'
 import AdminPlansPanel from './components/AdminPlansPanel'
+import CostChart from './components/CostChart'
 
 const UPLOAD_SERVER = process.env.NEXT_PUBLIC_UPLOAD_SERVER || 'http://localhost:5050'
 
@@ -93,6 +94,19 @@ export default function AdminPage() {
   const [funding, setFunding] = useState(false)
   const [fundResult, setFundResult] = useState<{ ok: boolean; pending?: boolean; txId?: string | null; message?: string; error?: string } | null>(null)
   const [walletCopied, setWalletCopied] = useState(false)
+
+  // Panel navigation
+  const [active, setActive] = useState('overview')
+  const NAV = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'balances', label: 'Balances', icon: Wallet },
+    { id: 'uploads', label: 'Uploads', icon: Upload },
+    { id: 'users', label: 'Users', icon: Users },
+    { id: 'plans', label: 'Plans', icon: CreditCard },
+    { id: 'keys', label: 'API Keys', icon: KeyRound },
+    { id: 'cron', label: 'Cron', icon: Activity },
+    { id: 'settings', label: 'Settings', icon: Settings },
+  ]
 
   // Upload state
   const [uploadFile, setUploadFile] = useState<File | null>(null)
@@ -477,33 +491,90 @@ export default function AdminPage() {
   }
 
   // Admin dashboard
-  return (
-    <div className="min-h-screen bg-black">
-      <header className="container mx-auto px-4 py-6">
-        <nav className="flex justify-between items-center">
-          <Link href="/" className="text-xl font-medium text-white">
-            Stash
-          </Link>
-          <div className="flex items-center gap-6 text-sm">
-            <span className="text-gray-500">Admin</span>
-            <button
-              onClick={handleLogout}
-              className="flex items-center gap-1 text-gray-500 hover:text-white"
-            >
-              <LogOut className="w-3 h-3" />
-              Sign out
-            </button>
+    return (
+      <div className="min-h-screen bg-[#0a0a0f] text-white">
+        {/* Top bar */}
+        <header className="sticky top-0 z-20 border-b border-white/10 bg-[#0a0a0f]/80 backdrop-blur">
+          <div className="flex items-center justify-between px-6 h-14">
+            <div className="flex items-center gap-2.5">
+              <span className="w-2 h-2 rounded-full bg-cyan-400" />
+              <Link href="/" className="font-semibold tracking-tight">Stash</Link>
+              <span className="text-gray-500 text-sm">/ admin</span>
+            </div>
+            <div className="flex items-center gap-4 text-sm">
+              <span className="hidden sm:inline text-gray-500">Panel</span>
+              <button
+                onClick={handleLogout}
+                className="flex items-center gap-1.5 text-gray-400 hover:text-white transition-colors"
+              >
+                <LogOut className="w-3.5 h-3.5" />
+                Sign out
+              </button>
+            </div>
           </div>
-        </nav>
-      </header>
+        </header>
 
-      <main className="container mx-auto px-4 py-12 max-w-2xl">
-        <HealthBanner authenticated={authenticated} />
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <h1 className="text-2xl font-medium text-white mb-1">Balances</h1>
-            <p className="text-gray-500 text-sm">Irys devnet & Sepolia wallet</p>
-          </div>
+        <div className="flex">
+          {/* Sidebar */}
+          <aside className="w-56 shrink-0 border-r border-white/10 p-3 sticky top-14 h-[calc(100vh-3.5rem)] overflow-y-auto hidden md:block">
+            <nav className="space-y-1">
+              {NAV.map((n) => {
+                const Icon = n.icon
+                return (
+                  <button
+                    key={n.id}
+                    onClick={() => setActive(n.id)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors ${
+                      active === n.id
+                        ? 'bg-white/10 text-white'
+                        : 'text-gray-400 hover:text-white hover:bg-white/5'
+                    }`}
+                  >
+                    <Icon className="w-4 h-4" />
+                    {n.label}
+                  </button>
+                )
+              })}
+            </nav>
+          </aside>
+
+          {/* Main */}
+          <main className="flex-1 px-4 sm:px-6 py-8 max-w-5xl">
+            {/* Mobile nav */}
+            <div className="flex gap-2 overflow-x-auto pb-4 mb-6 md:hidden">
+              {NAV.map((n) => {
+                const Icon = n.icon
+                return (
+                  <button
+                    key={n.id}
+                    onClick={() => setActive(n.id)}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs whitespace-nowrap transition-colors ${
+                      active === n.id ? 'bg-white/10 text-white' : 'text-gray-400 hover:text-white'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    {n.label}
+                  </button>
+                )
+              })}
+            </div>
+
+            {active === 'overview' && (
+              <div className="space-y-8">
+                <HealthBanner authenticated={authenticated} />
+                <CostChart authenticated={authenticated} />
+                <ExpiringSoon authenticated={authenticated} />
+                <CronStatus authenticated={authenticated} />
+              </div>
+            )}
+
+            {active === 'balances' && (
+              <div className="space-y-4">
+                <div className="flex items-center justify-between mb-6">
+                  <div>
+                    <h1 className="text-2xl font-semibold text-white mb-1">Balances</h1>
+                    <p className="text-gray-500 text-sm">Irys devnet & Sepolia wallet</p>
+                  </div>
           <button
             onClick={fetchBalances}
             disabled={loading}
@@ -653,9 +724,12 @@ export default function AdminPage() {
             </div>
           </div>
         ) : null}
+                    </div>
+                  )}
 
-        {/* Settings Section */}
-        <div className="mt-16">
+                  {active === 'settings' && (
+                    <div className="space-y-4">
+                      {/* Settings Section Section */}
           <div className="flex items-center justify-between mb-8">
             <div>
               <h2 className="text-2xl font-medium text-white mb-1">Settings</h2>
@@ -789,10 +863,12 @@ export default function AdminPage() {
               )}
             </div>
           ) : null}
-        </div>
+            </div>
+          )}
 
-        {/* Upload Section */}
-        <div className="mt-16">
+          {active === 'uploads' && (
+            <div className="space-y-4">
+              {/* Upload Section */}
           <div className="flex items-center justify-between mb-8">
             <div>
               <h2 className="text-2xl font-medium text-white mb-1">Upload</h2>
@@ -885,16 +961,36 @@ export default function AdminPage() {
               </label>
             </div>
           )}
-        </div>
+            <UploadStats authenticated={authenticated} />
+            <UploadHistory authenticated={authenticated} />
+          </div>
+          )}
 
-        <AdminUsersPanel authenticated={authenticated} />
-        <AdminPlansPanel authenticated={authenticated} />
-        <ExpiringSoon authenticated={authenticated} />
-        <CronStatus authenticated={authenticated} />
-        <UploadStats authenticated={authenticated} />
-        <UploadHistory authenticated={authenticated} />
-        <ApiKeyManager authenticated={authenticated} />
-      </main>
+          {active === 'users' && (
+            <div className="space-y-4">
+              <AdminUsersPanel authenticated={authenticated} />
+            </div>
+          )}
+
+          {active === 'plans' && (
+            <div className="space-y-4">
+              <AdminPlansPanel authenticated={authenticated} />
+            </div>
+          )}
+
+          {active === 'keys' && (
+            <div className="space-y-4">
+              <ApiKeyManager authenticated={authenticated} />
+            </div>
+          )}
+
+          {active === 'cron' && (
+            <div className="space-y-4">
+              <CronStatus authenticated={authenticated} />
+            </div>
+          )}
+        </main>
+      </div>
     </div>
   )
 }

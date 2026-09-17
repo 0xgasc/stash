@@ -294,6 +294,13 @@ router.post('/uploads/bulk-skip-refresh', (req, res) => {
     if (result.changes > 0) updated++;
   }
   res.json({ updated, total: uuids.length, refresh_skipped: !!skip });
-});
+  });
 
-module.exports = router;
+  // GET /cost-series — how the Sepolia wallet's ETH is consumed over time.
+  // Daily spend + cumulative + by-source, from upload_links.price_wei.
+  router.get('/cost-series', (req, res) => {
+    const { getCostSeries } = require('../db');
+    res.json(getCostSeries());
+  });
+
+  module.exports = router;

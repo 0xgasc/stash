@@ -781,9 +781,66 @@ function getStats() {
     daily_uploads: dailySeries,
     daily_cost_wei: dailyCost,
     largest_uploads: top10,
-    recent_uploads: recent,
-  };
-}
+        recent_uploads: recent,
+          };
+        }
+
+        // =====================================================
+        // COST SERIES — how the Sepolia wallet's ETH is consumed
+        // =====================================================
+        // Every Irys upload/re-upload writes a price_wei row to upload_links. This is
+        // the spend side of the wallet: the Sepolia wallet funds the Irys ledger, and
+        // the ledger is drained by these uploads. price_wei is TEXT (wei can exceed
+        // Number.MAX_SAFE_INTEGER), so sums are cast to TEXT and read back as BigInt.
+        const _costSeriesDaily = db.prepare(`
+          SELECT DATE(created_at) AS day,
+                 CAST(COALESCE(SUM(CAST(price_wei AS INTEGER)), 0) AS TEXT) AS wei,
+                 COUNT(*) AS n
+          FROM upload_links
+          WHERE price_wei IS NOT NULL AND CAST(price_wei AS INTEGER) > 0
+          GROUP BY day ORDER BY day ASC
+        `);
+        const _costSeriesBySource = db.prepare(`
+          SELECT COALESCE(u.source, 'unknown') AS source,
+                 CAST(COALESCE(SUM(CAST(l.price_wei AS INTEGER)), 0) AS TEXT) AS wei,
+                 COUNT(*) AS n
+          FROM upload_links l
+          LEFT JOIN uploads u ON u.uuid = l.upload_uuid
+          WHERE l.price_wei IS NOT NULL AND CAST(l.price_wei AS INTEGER) > 0
+          GROUP BY source ORDER BY CAST(wei AS INTEGER) DESC
+        `);
+        function getCostSeries() {
+          const daily = _costSeriesDaily.all();
+          const bySource = _costSeriesBySource.all();
+
+          let totalWei = 0n;
+          let cumulative = 0;
+          const days = daily.map((d) => {
+            const w = BigInt(d.wei);
+            totalWei += w;
+            cumulative += Number(w) / 1e18;
+            return {
+              date: d.day,
+              wei: w.toString(),
+              eth: Number(w) / 1e18,
+              cumulativeEth: cumulative,
+              count: d.n,
+            };
+          });
+
+          return {
+            totalWei: totalWei.toString(),
+            totalEth: Number(totalWei) / 1e18,
+            revisions: daily.reduce((a, d) => a + d.n, 0),
+            daily: days,
+            bySource: bySource.map((s) => ({
+              source: s.source,
+              wei: s.wei,
+              eth: Number(BigInt(s.wei)) / 1e18,
+              count: s.n,
+            })),
+          };
+        }
 
 // =====================================================
 // USERS
@@ -1658,6 +1715,7 @@ module.exports = {
   findApiKeyByHash,
   updateApiKeyLastUsed,
   getStats,
+  getCostSeries,
   // users
   upsertUser, getUserById, getUserByAuthId, getUserByHandle, isReservedHandle,
   claimHandle, updateUserProfile,
