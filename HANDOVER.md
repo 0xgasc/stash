@@ -169,6 +169,7 @@ SQLite via `better-sqlite3`, stored on Railway volume. Migrations auto-apply on 
 | v12     | backfill_skipped flag for unrecoverable uploads |
 | v13     | stream_url column for web-optimized video |
 | v14     | refresh_skipped flag to opt files out of devnet refresh |
+| v15     | evictions table — records when a devnet copy is found wrong (age at detection) |
 
 ### Key Tables
 
@@ -242,6 +243,9 @@ SQLite via `better-sqlite3`, stored on Railway volume. Migrations auto-apply on 
 | `PATCH /api/v1/admin/uploads/:uuid` | Update upload metadata (content_type, title, visibility, refresh_skipped) |
 | `POST /api/v1/admin/uploads/bulk-skip-refresh` | Mark multiple uploads to skip refresh |
 | `POST /api/v1/admin/migrate-gateway` | Bulk swap gateway domain in all irys_url values |
+| `GET /api/v1/admin/cost-series` | Daily + cumulative + by-source ETH spend from upload_links.price_wei (BigInt-safe) |
+| `GET /api/v1/admin/evictions` | Retention measurement: per-day eviction counts + age stats from the evictions table |
+| `GET /api/v1/admin/link-health?uuid=…` | Probe ONE devnet copy: reports alive / evicted / mismatch (byte count vs uploads.size) |
 
 ### Auth Model
 
@@ -286,6 +290,21 @@ Enforcement (all in `server.js`, secrets/caps in `utils/uploadToken.js`):
 `backend/scripts/e2e-token-upload.sh` fires the whole flow against a throwaway
 DB (bogus-token 401, oversize 413, binding on PATCH, type-cap at complete) with
 no Irys spend. `backend/test/upload-token.test.js` covers the token logic.
+
+### Retention & eviction measurement
+
+The verify sweep probes every live devnet copy daily. When one comes back wrong
+(evicted or corrupt), it now records the event in the `evictions` table with the
+file's **age at detection** — the real retention number — then repairs it from
+the volume original. So a "deleted" clip never stays deleted for the healthy
+files; the table is the historical record of when copies actually died.
+
+- `GET /api/v1/admin/evictions` — per-day counts + min/max/avg age at detection.
+- `GET /api/v1/admin/link-health?uuid=…` — probe one copy on demand: `alive` /
+  `evicted` / `mismatch` (byte count vs `uploads.size`). The admin Overview has
+  a "Check an old link" box wired to it.
+- The admin Overview also shows overdue count, approaching-threshold count, and
+  a 30-day re-upload bar chart (RefreshHealth card).
 
 ## Utils (`backend/utils/`)
 
