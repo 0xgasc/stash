@@ -131,7 +131,7 @@ async function initTusServer() {
         || (req && req.node && req.node.req)
         || req;
       if (raw && raw.tokenCtx && id) {
-        tokenizedUploads.set(id, { ...raw.tokenCtx });
+        tokenizedUploads.set(id, { ...raw.tokenCtx, createdAt: Date.now() });
       }
     });
 
@@ -723,6 +723,15 @@ setInterval(() => {
       completedTusUploads.delete(id);
       try { fs.unlinkSync(info.filePath); } catch {}
       try { fs.unlinkSync(info.filePath + '.json'); } catch {}
+      swept++;
+    }
+  }
+  // A token-scoped upload that was created but never completed (or whose
+  // /complete never arrived) would otherwise sit in this map forever. The
+  // tmpdir sweep below already removes its partial file; drop the binding too.
+  for (const [id, info] of tokenizedUploads) {
+    if (info.createdAt && info.createdAt < cutoff) {
+      tokenizedUploads.delete(id);
       swept++;
     }
   }
