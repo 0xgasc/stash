@@ -14,7 +14,7 @@
  * "Wrong" means the reported total length differs from uploads.size —
  * the same check that would have caught the HTML-shell corruption.
  */
-const { getLiveUploadsForVerify, updateUploadAfterReupload, recordEviction, startCronRun, finishCronRun } = require('../db');
+const { getLiveUploadsForVerify, updateUploadAfterReupload, recordEviction, markEvictionRepaired, startCronRun, finishCronRun } = require('../db');
 const { reuploadFromExisting } = require('../utils/reupload');
 const { sendAlert } = require('../utils/alerts');
 
