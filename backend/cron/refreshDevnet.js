@@ -15,10 +15,10 @@
 const { findStaleUploads, getUploadById, updateUploadAfterReupload, startCronRun, finishCronRun } = require('../db');
 const { reuploadFromExisting } = require('../utils/reupload');
 
-const RUN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const RUN_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 5 * 60 * 1000;
 const REFRESH_AFTER_DAYS = parseInt(process.env.REFRESH_AFTER_DAYS || '20', 10);
-const MAX_PER_RUN = parseInt(process.env.REFRESH_MAX_PER_RUN || '50', 10);
+const MAX_PER_RUN = parseInt(process.env.REFRESH_MAX_PER_RUN || '20', 10);
 
 let running = false;
 

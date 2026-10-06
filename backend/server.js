@@ -593,7 +593,8 @@ function sendGone(res, upload, detail) {
 // STABLE PUBLIC REDIRECT
 // /f/:uuid → 302 to the gateway URL (chain-first).
 // Gateway serves from Arweave/Irys — free, permanent, decentralized.
-// Falls back to volume only if no gateway URL exists.
+// Videos are served from the volume (Safari breaks on Irys 307 redirects).
+// Non-video files redirect to the gateway to avoid Railway egress costs.
 // 302 + no-store so the redirect target can change without stale caches.
 // =====================================================
 app.get('/f/:uuid', (req, res) => {
@@ -602,13 +603,18 @@ app.get('/f/:uuid', (req, res) => {
   const upload = getUploadById(uuid);
   if (!upload) return res.status(404).send('Not found');
   res.set('Access-Control-Allow-Origin', '*');
+  const isVideo = upload.content_type && upload.content_type.startsWith('video/');
   const { filePath, optimized, lost } = pickLocalCopy(upload);
+  if (lost) return sendGone(res, upload, 'The stored copy is not the file that was uploaded.');
+  if (!isVideo && upload.irys_url) {
+    res.set('Cache-Control', 'no-store');
+    return res.redirect(302, upload.irys_url);
+  }
   if (filePath) {
     const ct = optimized ? 'video/mp4' : (upload.content_type || 'application/octet-stream');
     return serveFileWithRange(req, res, filePath, ct,
       'public, max-age=86400, stale-while-revalidate=604800');
   }
-  if (lost) return sendGone(res, upload, 'The stored copy is not the file that was uploaded.');
   if (upload.irys_url) {
     res.set('Cache-Control', 'no-store');
     return res.redirect(302, upload.irys_url);
@@ -633,8 +639,10 @@ app.get('/f/:uuid/meta', (req, res) => {
   let contentUrl;
   if (isVideo && hasLocal) {
     contentUrl = `${baseUrl}/f/${upload.uuid}/raw`;
+  } else if (upload.irys_url) {
+    contentUrl = upload.irys_url;
   } else {
-    contentUrl = upload.stream_url || upload.irys_url || `${baseUrl}/f/${upload.uuid}/raw`;
+    contentUrl = upload.stream_url || `${baseUrl}/f/${upload.uuid}/raw`;
   }
   res.json({
     uuid: upload.uuid,
