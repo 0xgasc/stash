@@ -25,9 +25,15 @@ const REPAIR_MAX_PER_RUN = parseInt(process.env.VERIFY_REPAIR_MAX_PER_RUN || '50
 
 let running = false;
 
-async function probe(record) {
+const RETRY_DELAYS_MS = [5_000, 15_000];
+
+// `transient` = we could not get an answer (network error, 5xx, 429), which says
+// nothing about whether devnet still holds the file.
+async function probeOnce(record) {
   try {
     const r = await fetch(record.irys_url, { headers: { Range: 'bytes=0-0' }, signal: AbortSignal.timeout(20_000) });
+    await r.body?.cancel();
+    if (r.status >= 500 || r.status === 429) return { ok: false, transient: true, why: `http ${r.status}` };
     if (!r.ok && r.status !== 206) return { ok: false, why: `http ${r.status}` };
     const cr = r.headers.get('content-range');
     const total = cr ? Number(cr.split('/')[1]) : Number(r.headers.get('content-length'));
@@ -35,8 +41,19 @@ async function probe(record) {
     if (total !== record.size) return { ok: false, why: `${total}B on devnet, ${record.size}B expected` };
     return { ok: true };
   } catch (err) {
-    return { ok: false, why: err.message };
+    const cause = err.cause?.code || err.cause?.message;
+    return { ok: false, transient: true, why: cause ? `${err.message} (${cause})` : err.message };
   }
+}
+
+async function probe(record, delays = RETRY_DELAYS_MS) {
+  let res = await probeOnce(record);
+  for (const delay of delays) {
+    if (!res.transient) break;
+    await new Promise(r => setTimeout(r, delay));
+    res = await probeOnce(record);
+  }
+  return res;
 }
 
 async function runOnce() {
@@ -48,6 +65,7 @@ async function runOnce() {
   const runId = startCronRun('verify-devnet');
   const startedAt = Date.now();
   const bad = [];
+  const unreachable = [];
   let checked = 0, repaired = 0, repairFailed = 0;
   const errors = [];
 
@@ -59,12 +77,16 @@ async function runOnce() {
         const rec = queue.shift();
         checked++;
         const res = await probe(rec);
-        if (!res.ok) bad.push({ rec, why: res.why });
+        if (res.ok) continue;
+        (res.transient ? unreachable : bad).push({ rec, why: res.why });
       }
     }));
 
+    if (unreachable.length) {
+      console.log(`🔎 Verify sweep: ${unreachable.length} devnet copies unreachable after retries — not counted as evictions`);
+    }
     if (bad.length === 0) {
-          console.log(`🔎 Verify sweep: ${checked} devnet copies checked, all intact`);
+          console.log(`🔎 Verify sweep: ${checked - unreachable.length} devnet copies answered, all intact`);
         } else {
           console.log(`🔎 Verify sweep: ${bad.length} of ${checked} devnet copies wrong — repairing from archive`);
         }
@@ -102,30 +124,37 @@ async function runOnce() {
       }
     }
 
-    if (bad.length > 0) {
+    if (bad.length > 0 || unreachable.length > 0) {
+      const unreachableHtml = unreachable.length
+        ? `<p>${unreachable.length} could not be reached after ${RETRY_DELAYS_MS.length + 1} attempts (network or gateway error). They were not counted as evictions and not re-uploaded; tomorrow's sweep checks them again.</p>
+<ul>${unreachable.slice(0, 10).map(({ rec, why }) => `<li><code>${rec.uuid}</code> ${rec.filename || ''} — ${why}</li>`).join('')}</ul>`
+        : '';
       await sendAlert({
         key: `verify-repair-${new Date().toISOString().slice(0, 10)}`,
-        subject: `[stash] 🔎 ${bad.length} devnet cop${bad.length === 1 ? 'y' : 'ies'} wrong — ${repaired} repaired, ${repairFailed} failed`,
+        subject: bad.length
+          ? `[stash] 🔎 ${bad.length} devnet cop${bad.length === 1 ? 'y' : 'ies'} wrong — ${repaired} repaired, ${repairFailed} failed`
+          : `[stash] 🔎 ${unreachable.length} devnet cop${unreachable.length === 1 ? 'y' : 'ies'} unreachable during verify`,
         html: `<p>Daily verify sweep checked ${checked} live files. ${bad.length} came back wrong from devnet.</p>
 <ul>${bad.slice(0, 20).map(({ rec, why }) => `<li><code>${rec.uuid}</code> ${rec.filename || ''} — ${why}</li>`).join('')}</ul>
 ${bad.length > 20 ? `<p>…and ${bad.length - 20} more.</p>` : ''}
 <p>Repaired from the archive copy: <strong>${repaired}</strong>. Failed: <strong>${repairFailed}</strong>${repairFailed ? ` — <code>${errors.slice(0, 3).join(' | ')}</code>` : ''}.</p>
+${unreachableHtml}
 <p>If this fires with files younger than 60 days, devnet retention has changed and the refresh cadence should be revisited.</p>`,
       });
     }
 
-    const summary = `checked=${checked} wrong=${bad.length} repaired=${repaired}`;
+    const summary = `checked=${checked} wrong=${bad.length} unreachable=${unreachable.length} repaired=${repaired}`;
     finishCronRun(runId, {
       status: repairFailed === 0 ? 'success' : (repaired > 0 ? 'partial' : 'failed'),
-      processed: checked, success: checked - bad.length + repaired, failed: repairFailed,
-      error: errors.length ? `${summary} | ${errors.slice(0, 4).join(' | ')}` : (bad.length ? summary : null),
+      processed: checked, success: checked - bad.length - unreachable.length + repaired, failed: repairFailed,
+      error: errors.length ? `${summary} | ${errors.slice(0, 4).join(' | ')}` : (bad.length || unreachable.length ? summary : null),
     });
   } catch (err) {
     finishCronRun(runId, { status: 'crashed', processed: checked, success: repaired, failed: repairFailed, error: err.message });
     throw err;
   } finally {
     running = false;
-    console.log(`🔎 Verify sweep finished in ${Math.round((Date.now() - startedAt) / 1000)}s — checked=${checked} wrong=${bad.length} repaired=${repaired} failed=${repairFailed}`);
+    console.log(`🔎 Verify sweep finished in ${Math.round((Date.now() - startedAt) / 1000)}s — checked=${checked} wrong=${bad.length} unreachable=${unreachable.length} repaired=${repaired} failed=${repairFailed}`);
   }
 }
 
@@ -143,4 +172,4 @@ function startVerifyCron() {
   }, FIRST_RUN_DELAY_MS);
 }
 
-module.exports = { startVerifyCron, runOnce, RUN_INTERVAL_MS };
+module.exports = { startVerifyCron, runOnce, probe, RUN_INTERVAL_MS };

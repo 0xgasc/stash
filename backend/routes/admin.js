@@ -311,6 +311,14 @@ router.post('/uploads/bulk-skip-refresh', (req, res) => {
     res.json(getEvictionStats({ days, limit }));
   });
 
+  // GET /downloads?hours=24 — which files and requesters drove volume egress
+  router.get('/downloads', (req, res) => {
+    const { getDownloadStats } = require('../db');
+    const hours = Math.min(parseInt(req.query.hours, 10) || 24, 24 * 30);
+    const limit = Math.min(parseInt(req.query.limit, 10) || 15, 100);
+    res.json(getDownloadStats({ hours, limit }));
+  });
+
   // GET /link-health?uuid=... — probe ONE devnet copy and report if it's alive.
   // This is the "does this old link still work" check: asks devnet for one byte
   // and compares the reported total length to uploads.size (the only signal that

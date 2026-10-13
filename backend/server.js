@@ -20,7 +20,8 @@ const os = require('os');
 const fs = require('fs');
 
 const { uploadFileToIrysFromPath } = require('./utils/irysUploader');
-const { insertUpload, getUploadById } = require('./db');
+const { insertUpload, getUploadById, recordDownload } = require('./db');
+const { pipeline } = require('stream');
 const apiRoutes = require('./routes/api');
 const { getClientInfo } = require('./utils/clientInfo');
 const { scheduleGeoLookup } = require('./utils/geo');
@@ -521,6 +522,24 @@ app.post('/tus-upload/complete', async (req, res) => {
   }
 });
 
+// Logged on close with the bytes actually read, so an aborted video seek counts what was sent.
+function logDownload(req, stream, ranged) {
+  stream.once('close', () => {
+    try {
+      const { ip_address, referer, user_agent } = getClientInfo(req);
+      recordDownload({
+        upload_uuid: req.params.uuid,
+        route: req.route?.path || req.path,
+        bytes: stream.bytesRead,
+        ranged: ranged ? 1 : 0,
+        ip_address, referer, user_agent,
+      });
+    } catch (err) {
+      console.error('⚠️  Failed to record download:', err.message);
+    }
+  });
+}
+
 // Range-aware file streaming (Safari requires HTTP 206 for video playback)
 function serveFileWithRange(req, res, filePath, contentType, cacheControl) {
   const stat = fs.statSync(filePath);
@@ -541,10 +560,14 @@ function serveFileWithRange(req, res, filePath, contentType, cacheControl) {
     res.status(206);
     res.set('Content-Range', `bytes ${start}-${end}/${fileSize}`);
     res.set('Content-Length', end - start + 1);
-    fs.createReadStream(filePath, { start, end }).pipe(res);
+    const stream = fs.createReadStream(filePath, { start, end });
+    logDownload(req, stream, true);
+    pipeline(stream, res, () => {});
   } else {
     res.set('Content-Length', fileSize);
-    fs.createReadStream(filePath).pipe(res);
+    const stream = fs.createReadStream(filePath);
+    logDownload(req, stream, false);
+    pipeline(stream, res, () => {});
   }
 }
 
@@ -767,4 +790,13 @@ app.listen(PORT, () => {
   startRefreshCron();
   startAlertCron();
   startVerifyCron();
+  setInterval(() => {
+    try {
+      const { pruneDownloads } = require('./db');
+      const n = pruneDownloads({ days: 30 });
+      if (n) console.log(`🧹 Pruned ${n} download log rows older than 30d`);
+    } catch (err) {
+      console.error('⚠️  Download log prune failed:', err.message);
+    }
+  }, 24 * 60 * 60 * 1000);
 });

@@ -425,6 +425,23 @@ migrate(15, 'evictions — record when a devnet copy is found wrong', () => {
   `);
 });
 
+migrate(16, 'downloads — one row per file served from the volume', () => {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS downloads (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      upload_uuid TEXT NOT NULL,
+      route TEXT,
+      bytes INTEGER,
+      ranged INTEGER DEFAULT 0,
+      ip_address TEXT,
+      referer TEXT,
+      user_agent TEXT,
+      created_at TEXT NOT NULL DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_downloads_created ON downloads(created_at);
+  `);
+});
+
 // =====================================================
 // PREPARED STATEMENTS — uploads
 // =====================================================
@@ -911,6 +928,59 @@ function getEvictionStats({ days = 30, limit = 20 } = {}) {
     byDay,
     recent,
   };
+}
+
+// =====================================================
+// DOWNLOADS — traces egress spikes back to files and requesters
+// =====================================================
+const _insertDownload = db.prepare(`
+  INSERT INTO downloads (upload_uuid, route, bytes, ranged, ip_address, referer, user_agent)
+  VALUES (@upload_uuid, @route, @bytes, @ranged, @ip_address, @referer, @user_agent)
+`);
+function recordDownload(row) {
+  _insertDownload.run({ ranged: 0, ip_address: null, referer: null, user_agent: null, ...row });
+}
+
+const _downloadsTotals = db.prepare(`
+  SELECT COUNT(*) AS requests, COALESCE(SUM(bytes), 0) AS bytes
+  FROM downloads WHERE created_at >= datetime('now', @cutoff)
+`);
+const _downloadsByHour = db.prepare(`
+  SELECT strftime('%Y-%m-%d %H:00', created_at) AS hour, COUNT(*) AS requests, SUM(bytes) AS bytes
+  FROM downloads WHERE created_at >= datetime('now', @cutoff)
+  GROUP BY hour ORDER BY hour ASC
+`);
+const _downloadsTopFiles = db.prepare(`
+  SELECT d.upload_uuid AS uuid, u.filename, u.source, COUNT(*) AS requests, SUM(d.bytes) AS bytes
+  FROM downloads d LEFT JOIN uploads u ON u.uuid = d.upload_uuid
+  WHERE d.created_at >= datetime('now', @cutoff)
+  GROUP BY d.upload_uuid ORDER BY bytes DESC LIMIT @limit
+`);
+const downloadsTopBy = (col) => db.prepare(`
+  SELECT ${col} AS value, COUNT(*) AS requests, SUM(bytes) AS bytes
+  FROM downloads WHERE created_at >= datetime('now', @cutoff)
+  GROUP BY ${col} ORDER BY bytes DESC LIMIT @limit
+`);
+const _downloadsTopIps = downloadsTopBy('ip_address');
+const _downloadsTopReferers = downloadsTopBy('referer');
+const _downloadsTopAgents = downloadsTopBy('user_agent');
+
+function getDownloadStats({ hours = 24, limit = 15 } = {}) {
+  const args = { cutoff: `-${hours} hours`, limit };
+  return {
+    hours,
+    ...(_downloadsTotals.get(args)),
+    byHour: _downloadsByHour.all(args),
+    topFiles: _downloadsTopFiles.all(args),
+    topIps: _downloadsTopIps.all(args),
+    topReferers: _downloadsTopReferers.all(args),
+    topUserAgents: _downloadsTopAgents.all(args),
+  };
+}
+
+const _pruneDownloads = db.prepare(`DELETE FROM downloads WHERE created_at < datetime('now', @cutoff)`);
+function pruneDownloads({ days = 30 } = {}) {
+  return _pruneDownloads.run({ cutoff: `-${days} days` }).changes;
 }
 
 // =====================================================
@@ -1790,6 +1860,9 @@ module.exports = {
   recordEviction,
   markEvictionRepaired,
   getEvictionStats,
+  recordDownload,
+  getDownloadStats,
+  pruneDownloads,
   // users
   upsertUser, getUserById, getUserByAuthId, getUserByHandle, isReservedHandle,
   claimHandle, updateUserProfile,
